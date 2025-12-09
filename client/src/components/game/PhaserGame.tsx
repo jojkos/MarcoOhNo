@@ -32,15 +32,15 @@ class GameScene extends Phaser.Scene {
 
   create() {
     const { width, height } = MAP_CONFIG;
-    
+
     this.cameras.main.setBackgroundColor(0x0a0f1a);
-    
+
     this.createMap();
-    
+
     this.fogGraphics = this.add.graphics();
     this.visionMask = this.add.graphics();
     this.exploredMask = this.add.graphics();
-    
+
     if (!this.isTVView) {
       this.input.addPointer(1);
     }
@@ -48,10 +48,10 @@ class GameScene extends Phaser.Scene {
 
   createMap() {
     const { width, height } = MAP_CONFIG;
-    
+
     const gridGraphics = this.add.graphics();
     gridGraphics.lineStyle(1, 0x1a2744, 0.3);
-    
+
     const gridSize = 40;
     for (let x = 0; x <= width; x += gridSize) {
       gridGraphics.lineBetween(x, 0, x, height);
@@ -59,27 +59,8 @@ class GameScene extends Phaser.Scene {
     for (let y = 0; y <= height; y += gridSize) {
       gridGraphics.lineBetween(0, y, width, y);
     }
-    
-    const obstaclePositions = [
-      { x: 200, y: 200, w: 80, h: 80 },
-      { x: 400, y: 150, w: 120, h: 60 },
-      { x: 600, y: 300, w: 60, h: 120 },
-      { x: 900, y: 200, w: 100, h: 100 },
-      { x: 300, y: 500, w: 80, h: 80 },
-      { x: 700, y: 550, w: 150, h: 60 },
-      { x: 1000, y: 450, w: 80, h: 120 },
-      { x: 150, y: 650, w: 100, h: 80 },
-      { x: 500, y: 700, w: 60, h: 60 },
-      { x: 850, y: 680, w: 120, h: 80 },
-    ];
-    
-    obstaclePositions.forEach(obs => {
-      const obstacle = this.add.rectangle(
-        obs.x, obs.y, obs.w, obs.h, 0x2a3f5f
-      );
-      obstacle.setStrokeStyle(2, 0x3d5a80);
-      this.obstacles.push(obstacle);
-    });
+
+    // Walls are now dynamic from GameState
   }
 
   updateGameState(state: GameState) {
@@ -88,20 +69,39 @@ class GameScene extends Phaser.Scene {
     this.updateRipMarkers();
     this.updateMarcoReveals();
     this.updateFogOfWar();
+
+    // Update map walls if they changed (or just always for simplicity, optimize later if needed)
+    this.drawMapWalls(state.walls);
+  }
+
+  drawMapWalls(walls: { x: number, y: number, w: number, h: number }[]) {
+    // Basic optimization: don't redraw if count hasn't changed? 
+    // But position might change.
+    // For now, clear and redraw.
+    this.obstacles.forEach(obs => obs.destroy());
+    this.obstacles = [];
+
+    walls.forEach(wall => {
+      const rect = this.add.rectangle(
+        wall.x, wall.y, wall.w, wall.h, 0x2a3f5f
+      );
+      rect.setStrokeStyle(2, 0x3d5a80);
+      this.obstacles.push(rect);
+    });
   }
 
   updatePlayers() {
     if (!this.gameState) return;
-    
+
     const currentPlayerIds = new Set(this.gameState.players.map(p => p.id));
-    
+
     this.players.forEach((container, id) => {
       if (!currentPlayerIds.has(id)) {
         container.destroy();
         this.players.delete(id);
       }
     });
-    
+
     this.gameState.players.forEach(player => {
       if (player.status === "caught") {
         const existing = this.players.get(player.id);
@@ -111,22 +111,22 @@ class GameScene extends Phaser.Scene {
         }
         return;
       }
-      
+
       let container = this.players.get(player.id);
-      
+
       if (!container) {
         container = this.createPlayerSprite(player);
         this.players.set(player.id, container);
       }
-      
+
       container.setPosition(player.x, player.y);
-      
+
       const visionCone = container.getByName("visionCone") as Phaser.GameObjects.Graphics;
       if (visionCone && player.role === "seeker") {
         visionCone.clear();
         this.drawVisionCone(visionCone, player.angle);
       }
-      
+
       if (player.catchProgress > 0 && player.role === "runner") {
         const progressBg = container.getByName("progressBg") as Phaser.GameObjects.Rectangle;
         const progressBar = container.getByName("progressBar") as Phaser.GameObjects.Rectangle;
@@ -148,24 +148,24 @@ class GameScene extends Phaser.Scene {
 
   createPlayerSprite(player: Player): Phaser.GameObjects.Container {
     const container = this.add.container(player.x, player.y);
-    
+
     if (player.role === "seeker") {
       const visionCone = this.add.graphics();
       visionCone.setName("visionCone");
       this.drawVisionCone(visionCone, player.angle);
       container.add(visionCone);
     }
-    
+
     const color = Phaser.Display.Color.HexStringToColor(player.color).color;
     const body = this.add.circle(0, 0, MAP_CONFIG.playerRadius, color);
     body.setStrokeStyle(3, 0xffffff, player.role === "seeker" ? 1 : 0.6);
     container.add(body);
-    
+
     if (player.role === "seeker") {
       const flashlight = this.add.circle(6, -6, 5, 0xffd700);
       container.add(flashlight);
     }
-    
+
     const nameText = this.add.text(0, -MAP_CONFIG.playerRadius - 12, player.name, {
       fontSize: "12px",
       fontFamily: "Rajdhani",
@@ -175,20 +175,20 @@ class GameScene extends Phaser.Scene {
     });
     nameText.setOrigin(0.5, 1);
     container.add(nameText);
-    
+
     const progressBg = this.add.rectangle(0, MAP_CONFIG.playerRadius + 8, 30, 4, 0x333333);
     progressBg.setName("progressBg");
     progressBg.setVisible(false);
     container.add(progressBg);
-    
+
     const progressBar = this.add.rectangle(-15, MAP_CONFIG.playerRadius + 8, 30, 4, 0xff4444);
     progressBar.setName("progressBar");
     progressBar.setOrigin(0, 0.5);
     progressBar.setVisible(false);
     container.add(progressBar);
-    
+
     container.setDepth(player.role === "seeker" ? 100 : 50);
-    
+
     return container;
   }
 
@@ -196,7 +196,7 @@ class GameScene extends Phaser.Scene {
     const { seekerVisionAngle, seekerVisionDistance } = MAP_CONFIG;
     const startAngle = Phaser.Math.DegToRad(angle - seekerVisionAngle / 2);
     const endAngle = Phaser.Math.DegToRad(angle + seekerVisionAngle / 2);
-    
+
     graphics.clear();
     graphics.fillStyle(0xffd700, 0.15);
     graphics.beginPath();
@@ -204,7 +204,7 @@ class GameScene extends Phaser.Scene {
     graphics.arc(0, 0, seekerVisionDistance, startAngle, endAngle, false);
     graphics.closePath();
     graphics.fillPath();
-    
+
     graphics.lineStyle(2, 0xffd700, 0.4);
     graphics.beginPath();
     graphics.moveTo(0, 0);
@@ -215,17 +215,17 @@ class GameScene extends Phaser.Scene {
 
   updateRipMarkers() {
     if (!this.gameState) return;
-    
+
     this.gameState.players.forEach(player => {
       if (player.status === "caught" && player.ripPosition && !this.ripMarkers.has(player.id)) {
         const container = this.add.container(player.ripPosition.x, player.ripPosition.y);
-        
+
         const cross = this.add.graphics();
         cross.lineStyle(4, 0xff4444, 0.8);
         cross.lineBetween(-15, -15, 15, 15);
         cross.lineBetween(-15, 15, 15, -15);
         container.add(cross);
-        
+
         const ripText = this.add.text(0, 25, "RIP", {
           fontSize: "14px",
           fontFamily: "Orbitron",
@@ -235,7 +235,7 @@ class GameScene extends Phaser.Scene {
         });
         ripText.setOrigin(0.5, 0);
         container.add(ripText);
-        
+
         const nameText = this.add.text(0, 42, player.name, {
           fontSize: "10px",
           fontFamily: "Rajdhani",
@@ -243,10 +243,10 @@ class GameScene extends Phaser.Scene {
         });
         nameText.setOrigin(0.5, 0);
         container.add(nameText);
-        
+
         container.setDepth(30);
         container.setAlpha(0);
-        
+
         this.tweens.add({
           targets: container,
           alpha: 1,
@@ -254,7 +254,7 @@ class GameScene extends Phaser.Scene {
           duration: 500,
           ease: "Bounce.easeOut",
         });
-        
+
         this.ripMarkers.set(player.id, container);
       }
     });
@@ -262,19 +262,19 @@ class GameScene extends Phaser.Scene {
 
   updateMarcoReveals() {
     if (!this.gameState) return;
-    
+
     const { marcoRevealPlayerId, marcoRevealExpiry } = this.gameState;
-    
+
     if (marcoRevealPlayerId && marcoRevealExpiry && Date.now() < marcoRevealExpiry) {
       if (!this.marcoReveals.has(marcoRevealPlayerId)) {
         const player = this.gameState.players.find(p => p.id === marcoRevealPlayerId);
         if (player) {
           const container = this.add.container(player.x, player.y);
-          
+
           const ring = this.add.circle(0, 0, 40, undefined, 0);
           ring.setStrokeStyle(4, 0xcc66ff, 1);
           container.add(ring);
-          
+
           const ohNoText = this.add.text(0, -50, "OH NO!", {
             fontSize: "18px",
             fontFamily: "Orbitron",
@@ -284,9 +284,9 @@ class GameScene extends Phaser.Scene {
           });
           ohNoText.setOrigin(0.5, 1);
           container.add(ohNoText);
-          
-          container.setDepth(200);
-          
+
+          container.setDepth(2000);
+
           this.tweens.add({
             targets: ring,
             scaleX: 2.5,
@@ -299,7 +299,7 @@ class GameScene extends Phaser.Scene {
               this.marcoReveals.delete(marcoRevealPlayerId);
             },
           });
-          
+
           this.marcoReveals.set(marcoRevealPlayerId, container);
         }
       }
@@ -308,50 +308,50 @@ class GameScene extends Phaser.Scene {
 
   updateFogOfWar() {
     if (!this.gameState) return;
-    
+
     const { width, height } = MAP_CONFIG;
-    
+
     this.fogGraphics.clear();
     this.fogGraphics.setDepth(1000);
-    
+
     if (this.isTVView) {
       this.fogGraphics.fillStyle(0x050810, 0.85);
       this.fogGraphics.fillRect(0, 0, width, height);
-      
+
       this.fogGraphics.setBlendMode(Phaser.BlendModes.ERASE);
-      
+
       this.gameState.exploredAreas.forEach(area => {
         const gradient = this.fogGraphics.createGeometryMask();
         this.fogGraphics.fillStyle(0xffffff, 1);
         this.fogGraphics.fillCircle(area.x, area.y, area.radius);
       });
-      
+
       const seeker = this.gameState.players.find(p => p.role === "seeker");
       if (seeker) {
         this.fogGraphics.fillStyle(0xffffff, 1);
         this.drawVisionConeClip(this.fogGraphics, seeker.x, seeker.y, seeker.angle);
       }
-      
+
       this.fogGraphics.setBlendMode(Phaser.BlendModes.NORMAL);
-      
+
     } else {
       const localPlayer = this.gameState.players.find(p => p.id === this.localPlayerId);
       if (!localPlayer) return;
-      
+
       this.fogGraphics.fillStyle(0x050810, 0.9);
       this.fogGraphics.fillRect(0, 0, width, height);
-      
+
       this.fogGraphics.setBlendMode(Phaser.BlendModes.ERASE);
-      
+
       if (localPlayer.role === "seeker") {
         this.drawVisionConeClip(this.fogGraphics, localPlayer.x, localPlayer.y, localPlayer.angle);
       } else {
         this.fogGraphics.fillStyle(0xffffff, 1);
         this.fogGraphics.fillCircle(localPlayer.x, localPlayer.y, MAP_CONFIG.runnerVisionRadius);
       }
-      
+
       this.fogGraphics.setBlendMode(Phaser.BlendModes.NORMAL);
-      
+
       this.cameras.main.centerOn(localPlayer.x, localPlayer.y);
     }
   }
@@ -360,14 +360,14 @@ class GameScene extends Phaser.Scene {
     const { seekerVisionAngle, seekerVisionDistance } = MAP_CONFIG;
     const startAngle = Phaser.Math.DegToRad(angle - seekerVisionAngle / 2);
     const endAngle = Phaser.Math.DegToRad(angle + seekerVisionAngle / 2);
-    
+
     graphics.fillStyle(0xffffff, 1);
     graphics.beginPath();
     graphics.moveTo(x, y);
     graphics.arc(x, y, seekerVisionDistance, startAngle, endAngle, false);
     graphics.closePath();
     graphics.fillPath();
-    
+
     graphics.fillCircle(x, y, 50);
   }
 
@@ -377,17 +377,17 @@ class GameScene extends Phaser.Scene {
 
   update(time: number, delta: number) {
     if (!this.gameState || this.gameState.phase !== "playing") return;
-    
+
     const localPlayer = this.gameState.players.find(p => p.id === this.localPlayerId);
     if (!localPlayer || localPlayer.status === "caught") return;
-    
+
     const speed = 3;
     const newX = localPlayer.x + this.moveVector.x * speed;
     const newY = localPlayer.y + this.moveVector.y * speed;
-    
+
     const clampedX = Phaser.Math.Clamp(newX, MAP_CONFIG.playerRadius, MAP_CONFIG.width - MAP_CONFIG.playerRadius);
     const clampedY = Phaser.Math.Clamp(newY, MAP_CONFIG.playerRadius, MAP_CONFIG.height - MAP_CONFIG.playerRadius);
-    
+
     if (this.moveVector.x !== 0 || this.moveVector.y !== 0) {
       socket.emit("movePlayer", clampedX, clampedY, this.moveVector.angle);
     }
@@ -417,7 +417,7 @@ export function PhaserGame({ isTVView }: PhaserGameProps) {
     };
 
     gameRef.current = new Phaser.Game(config);
-    
+
     gameRef.current.events.once("ready", () => {
       const scene = gameRef.current?.scene.getScene("GameScene") as GameScene;
       if (scene) {
@@ -446,8 +446,8 @@ export function PhaserGame({ isTVView }: PhaserGameProps) {
   }, []);
 
   return (
-    <div 
-      ref={containerRef} 
+    <div
+      ref={containerRef}
       className="w-full h-full"
       data-testid="game-canvas"
     />
@@ -456,16 +456,16 @@ export function PhaserGame({ isTVView }: PhaserGameProps) {
 
 export function usePhaserMove() {
   const sceneRef = useRef<GameScene | null>(null);
-  
+
   const setScene = (scene: GameScene) => {
     sceneRef.current = scene;
   };
-  
+
   const handleMove = (dx: number, dy: number, angle: number) => {
     if (sceneRef.current) {
       sceneRef.current.setMoveVector(dx, dy, angle);
     }
   };
-  
+
   return { setScene, handleMove };
 }

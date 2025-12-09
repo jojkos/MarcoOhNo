@@ -2,10 +2,13 @@ import { useEffect, useRef, useCallback } from "react";
 import Phaser from "phaser";
 import { useGameStore } from "@/lib/gameStore";
 import { socket } from "@/lib/socket";
-import { MAP_CONFIG, OBSTACLES, type Player, type GameState } from "@shared/schema";
+import { MAP_CONFIG, type Player, type GameState } from "@shared/schema";
 import { GameHUD } from "./GameHUD";
 import { MobileControls } from "./MobileControls";
 import { calculateVisionPolygon } from "@/lib/vision";
+
+// Module-level variable to persist visited path across scene restarts (e.g. on resize or re-mount)
+let persistentVisitedPath: { x: number, y: number, radius: number }[] = [];
 
 class MobileGameScene extends Phaser.Scene {
   private players: Map<string, Phaser.GameObjects.Container> = new Map();
@@ -15,8 +18,9 @@ class MobileGameScene extends Phaser.Scene {
   // Fog components
   private fogGraphics!: Phaser.GameObjects.Graphics;
   private maskGraphics!: Phaser.GameObjects.Graphics;
-  private visitedPath: { x: number, y: number, radius: number }[] = [];
+  private visitedPath: { x: number, y: number, radius: number }[] = persistentVisitedPath;
   private lastVisitedPos: { x: number, y: number } | null = null;
+  private lastPhase: string = "";
 
   private gameState: GameState | null = null;
   private localPlayerId: string | null = null;
@@ -44,9 +48,18 @@ class MobileGameScene extends Phaser.Scene {
 
     // 1. Setup Fog Graphics (The visible blackness)
     this.fogGraphics = this.add.graphics();
-    this.fogGraphics.setDepth(1000); // High depth to cover everything
+    this.fogGraphics.setDepth(1000); // High depth
     this.fogGraphics.fillStyle(0x000000, 1);
     this.fogGraphics.fillRect(0, 0, MAP_CONFIG.width, MAP_CONFIG.height);
+
+    // Add "Waiting for game..." text if no player
+    if (!this.localPlayerId) {
+      const text = this.add.text(this.cameras.main.centerX, this.cameras.main.centerY, "Spectating / Waiting...", {
+        color: '#ffffff', fontSize: '24px'
+      });
+      text.setOrigin(0.5);
+      text.setDepth(2000);
+    }
 
     // 2. Setup Mask Graphics (Invisible, used to define the holes)
     // We use 'make.graphics' because it doesn't need to be added to scene, just used for mask data
@@ -77,7 +90,6 @@ class MobileGameScene extends Phaser.Scene {
     // Ensure camera operations happen after scene is ready
     this.events.on('update', () => {
       this.updateCamera();
-      this.interpolatePlayers();
     });
   }
 
@@ -90,27 +102,6 @@ class MobileGameScene extends Phaser.Scene {
         this.cameras.main.startFollow(container, true, 0.1, 0.1);
       }
     }
-  }
-
-  interpolatePlayers() {
-    // Smoothly interpolate remote players to their target positions
-    this.players.forEach((container, id) => {
-      if (id === this.localPlayerId) return; // Don't interpolate self, we predict
-
-      const targetX = container.getData('targetX');
-      const targetY = container.getData('targetY');
-      const targetAngle = container.getData('targetAngle');
-
-      if (targetX !== undefined && targetY !== undefined) {
-        container.x = Phaser.Math.Linear(container.x, targetX, 0.2); // Adjust 0.2 for smoothness/snap
-        container.y = Phaser.Math.Linear(container.y, targetY, 0.2);
-      }
-
-      if (targetAngle !== undefined) {
-        let angleDiff = Phaser.Math.Angle.ShortestBetween(container.angle, targetAngle);
-        container.angle += angleDiff * 0.2;
-      }
-    });
   }
 
   createMap() {
@@ -128,20 +119,36 @@ class MobileGameScene extends Phaser.Scene {
       gridGraphics.lineBetween(0, y, width, y);
     }
 
-    OBSTACLES.forEach(obs => {
-      const obstacle = this.add.rectangle(obs.x, obs.y, obs.w, obs.h, 0x2a3f5f);
-      obstacle.setStrokeStyle(2, 0x3d5a80);
-      obstacle.setDepth(10);
-      this.obstacles.push(obstacle);
-    });
+    // Walls are dynamic
   }
 
   updateGameState(state: GameState) {
+    // Clear visited path if we go back to lobby or significantly restart
+    if (this.lastPhase !== "lobby" && state.phase === "lobby") {
+      persistentVisitedPath.length = 0;
+      this.visitedPath = persistentVisitedPath;
+      this.lastVisitedPos = null;
+    }
+    this.lastPhase = state.phase;
+
     this.gameState = state;
     this.updatePlayers();
     this.updateRipMarkers();
     this.updateMarcoReveals();
     this.updateFogOfWar();
+    this.drawMapWalls(state.walls);
+  }
+
+  drawMapWalls(walls: { x: number, y: number, w: number, h: number }[]) {
+    this.obstacles.forEach(obs => obs.destroy());
+    this.obstacles = [];
+
+    walls.forEach(wall => {
+      const rect = this.add.rectangle(wall.x, wall.y, wall.w, wall.h, 0x2a3f5f);
+      rect.setStrokeStyle(2, 0x3d5a80);
+      rect.setDepth(10);
+      this.obstacles.push(rect);
+    });
   }
 
   updatePlayers() {
@@ -188,12 +195,19 @@ class MobileGameScene extends Phaser.Scene {
         container.setData('targetY', player.y);
         container.setData('targetAngle', player.angle);
       } else {
-        // Local player: Ensure visual container matches local prediction if desynced too much?
-        // For now, trust local prediction loop in update()
+        // Local player: Check for desync (e.g. after respawn)
+        // If distance is large (> 50px), snap to server position
+        const dist = Phaser.Math.Distance.Between(container.x, container.y, player.x, player.y);
+        if (dist > 50) {
+          container.setPosition(player.x, player.y);
+          // Also reset move vector to prevent "sliding" back
+          // But we don't have direct access to moveVector inputs here easily without clearing them?
+          // The next update loop will handle input.
+        }
       }
 
       const visionCone = container.getByName("visionCone") as Phaser.GameObjects.Graphics;
-      if (visionCone && player.role === "seeker") {
+      if (visionCone && player.role === "seeker" && player.id === this.localPlayerId) {
         visionCone.clear();
         this.drawVisionCone(visionCone, player.angle);
       }
@@ -236,6 +250,7 @@ class MobileGameScene extends Phaser.Scene {
 
     if (player.role === "seeker") {
       const flashlight = this.add.circle(6, -6, 5, 0xffd700);
+      flashlight.setName("flashlight");
       container.add(flashlight);
     }
 
@@ -285,7 +300,13 @@ class MobileGameScene extends Phaser.Scene {
     const container = graphics.parentContainer as Phaser.GameObjects.Container;
     const origin = { x: container.x, y: container.y };
 
-    const polygonPoints = calculateVisionPolygon(origin, angle, seekerVisionAngle, seekerVisionDistance);
+    const polygonPoints = calculateVisionPolygon(
+      origin,
+      angle,
+      seekerVisionAngle,
+      seekerVisionDistance,
+      this.gameState?.walls || []
+    );
 
     // Convert points back to local space relative to container (subtract origin)
     const localPoints = polygonPoints.map(p => ({ x: p.x - origin.x, y: p.y - origin.y }));
@@ -423,6 +444,25 @@ class MobileGameScene extends Phaser.Scene {
     // NOTE: If this path gets too long (thousands), we might need to optimize 
     // by using a RenderTexture for the mask source instead.
     // But for < few mins game, a few hundred circles is fine in WebGL.
+    // Draw server-synced explored areas (restores history on reload)
+    // Filter by role: Seeker sees only Seeker paths, Runners see only Runner paths
+    this.gameState.exploredAreas.forEach(area => {
+      // If no source (legacy), assume it belongs to everyone or handle gracefully? 
+      // Schema says optional, but we just added it. Assume persistence not an issue for fresh dev server.
+      // If source is missing, don't show to Seeker to be safe? Or show?
+      // Better:
+      const areaSource = area.source || "seeker"; // Default to seeker if undefined (legacy behavior)
+
+      const myRole = localPlayer.role === "seeker" ? "seeker" : "runner";
+
+      // Seeker only sees Seeker trails
+      // Runners only see Runner trails (shared team vision)
+      if (areaSource === myRole) {
+        this.maskGraphics.fillCircle(area.x, area.y, area.radius);
+      }
+    });
+
+    // Draw local visited path (immediate feedback)
     this.visitedPath.forEach(point => {
       this.maskGraphics.fillCircle(point.x, point.y, point.radius);
     });
@@ -433,11 +473,20 @@ class MobileGameScene extends Phaser.Scene {
       const startAngle = Phaser.Math.DegToRad(localPlayer.angle - seekerVisionAngle / 2);
       const endAngle = Phaser.Math.DegToRad(localPlayer.angle + seekerVisionAngle / 2);
 
+      // Use polygon for wall-aware vision
+      const polygonPoints = calculateVisionPolygon(
+        { x: localPlayer.x, y: localPlayer.y },
+        localPlayer.angle,
+        seekerVisionAngle,
+        seekerVisionDistance,
+        this.gameState?.walls || []
+      );
+
       this.maskGraphics.beginPath();
       this.maskGraphics.moveTo(localPlayer.x, localPlayer.y);
-      this.maskGraphics.arc(localPlayer.x, localPlayer.y, seekerVisionDistance, startAngle, endAngle, false);
+      this.maskGraphics.fillPoints(polygonPoints, true, true);
       this.maskGraphics.closePath();
-      this.maskGraphics.fillPath();
+      // this.maskGraphics.fillPath(); // fillPoints does the fill
 
       // Also a small circle around seeker
       this.maskGraphics.fillCircle(localPlayer.x, localPlayer.y, 60);
@@ -456,6 +505,41 @@ class MobileGameScene extends Phaser.Scene {
 
   update(time: number, delta: number) {
     if (!this.gameState || this.gameState.phase !== "playing") return;
+
+    // Interpolate Remote Players
+    const t = 0.15;
+    this.players.forEach((container, id) => {
+      if (id === this.localPlayerId) return;
+
+      const targetX = container.getData('targetX');
+      const targetY = container.getData('targetY');
+      const targetAngle = container.getData('targetAngle');
+
+      if (targetX !== undefined && targetY !== undefined && targetAngle !== undefined) {
+        container.x = Phaser.Math.Linear(container.x, targetX, t);
+        container.y = Phaser.Math.Linear(container.y, targetY, t);
+
+        const currentAngle = container.getData('currentAngle') || 0;
+        const diff = Phaser.Math.Angle.ShortestBetween(currentAngle, targetAngle);
+        const newAngle = currentAngle + diff * t;
+        container.setData('currentAngle', newAngle);
+
+        // Update Flashlight
+        const flashlight = container.getByName("flashlight") as Phaser.GameObjects.Shape;
+        if (flashlight) {
+          const rad = Phaser.Math.DegToRad(newAngle);
+          flashlight.x = Math.cos(rad) * 12; // Radius 12
+          flashlight.y = Math.sin(rad) * 12;
+        }
+
+        // Update Vision Cone
+        const visionCone = container.getByName("visionCone") as Phaser.GameObjects.Graphics;
+        if (visionCone) {
+          visionCone.clear();
+          this.drawVisionCone(visionCone, newAngle);
+        }
+      }
+    });
 
     const localPlayer = this.gameState.players.find(p => p.id === this.localPlayerId);
     if (!localPlayer || localPlayer.status === "caught") return;
@@ -492,7 +576,8 @@ class MobileGameScene extends Phaser.Scene {
 
     // Check X Axis Collision
     let testRectX = { x: nextX - 16, y: localPlayer.y - 16, w: 32, h: 32 };
-    const collidedX = OBSTACLES.some(obs => {
+    const walls = this.gameState.walls || [];
+    const collidedX = walls.some(obs => {
       return (testRectX.x < obs.x + obs.w / 2 &&
         testRectX.x + testRectX.w > obs.x - obs.w / 2 &&
         testRectX.y < obs.y + obs.h / 2 &&
@@ -501,7 +586,7 @@ class MobileGameScene extends Phaser.Scene {
 
     // Check Y Axis Collision
     let testRectY = { x: localPlayer.x - 16, y: nextY - 16, w: 32, h: 32 };
-    const collidedY = OBSTACLES.some(obs => {
+    const collidedY = walls.some(obs => {
       return (testRectY.x < obs.x + obs.w / 2 &&
         testRectY.x + testRectY.w > obs.x - obs.w / 2 &&
         testRectY.y < obs.y + obs.h / 2 &&
@@ -521,17 +606,85 @@ class MobileGameScene extends Phaser.Scene {
     const clampedY = Phaser.Math.Clamp(nextY, MAP_CONFIG.playerRadius, MAP_CONFIG.height - MAP_CONFIG.playerRadius);
 
     // Only emit if *actually* moving (and sliding counted as moving)
-    if (clampedX !== localPlayer.x || clampedY !== localPlayer.y) {
+    // Emit if moving OR rotating
+    const currentAngle = this.moveVector.angle;
+    const lastAngle = (localPlayer as any)._lastEmittedAngle || 0; // Use a temporary property on player object?
+    // Or better, store it in the container data or class property?
+    // Let's store it on the container data since we have access to it.
+    const container = this.players.get(localPlayer.id);
+    const lastEmittedAngle = container ? (container.getData('lastEmittedAngle') || 0) : 0;
+
+    // Check if angle changed significantly (e.g. > 0.1 degree)
+    const angleChanged = Math.abs(currentAngle - lastEmittedAngle) > 0.1;
+    const posChanged = clampedX !== localPlayer.x || clampedY !== localPlayer.y;
+
+    if (posChanged || angleChanged) {
       // Update local state IMMEDIATELY for smoothness
       localPlayer.x = clampedX;
       localPlayer.y = clampedY;
 
-      const container = this.players.get(localPlayer.id);
       if (container) {
         container.setPosition(clampedX, clampedY);
+        container.setData('lastEmittedAngle', currentAngle);
       }
 
-      socket.emit("movePlayer", clampedX, clampedY, this.moveVector.angle);
+      socket.emit("movePlayer", clampedX, clampedY, currentAngle);
+    }
+
+    this.updatePlayerVisibility();
+  }
+
+  updatePlayerVisibility() {
+    if (!this.gameState || !this.localPlayerId) return;
+    const localPlayer = this.gameState.players.find(p => p.id === this.localPlayerId);
+    if (!localPlayer) return;
+
+    if (localPlayer.role === 'seeker') {
+      const { seekerVisionAngle, seekerVisionDistance } = MAP_CONFIG;
+
+      const polygonPoints = calculateVisionPolygon(
+        { x: localPlayer.x, y: localPlayer.y },
+        localPlayer.angle,
+        seekerVisionAngle,
+        seekerVisionDistance,
+        this.gameState.walls || []
+      );
+
+      const visionPoly = new Phaser.Geom.Polygon(polygonPoints);
+
+      this.players.forEach((container, id) => {
+        if (id === this.localPlayerId) {
+          container.setVisible(true);
+          return;
+        }
+
+        // Always hide other players by default unless caught
+        let isVisible = false;
+
+        const player = this.gameState!.players.find(p => p.id === id);
+        if (player && player.status === 'caught') {
+          // Caught players are always visible (or maybe usually visible? Assumed yes for now)
+          isVisible = true;
+        } else {
+          // Verify if in flashlight cone or very close proximity
+          const dist = Phaser.Math.Distance.Between(localPlayer.x, localPlayer.y, container.x, container.y);
+          if (dist < 60) {
+            isVisible = true;
+          } else if (visionPoly.contains(container.x, container.y)) {
+            // Also check if line of sight is blocked? 
+            // calculateVisionPolygon already accounts for walls in the shape.
+            // If the point (center of player) is in the polygon, it's visible.
+            isVisible = true;
+          }
+        }
+
+        container.setVisible(isVisible);
+      });
+
+    } else {
+      // Runner: Rely on Fog of War (or ensure default visibility)
+      // If we previously hid them as seeker, we need to show them again if role swapped.
+      this.players.forEach(container => container.setVisible(true));
     }
   }
 }

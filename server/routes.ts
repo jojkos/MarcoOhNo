@@ -2,6 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { Server as SocketIOServer } from "socket.io";
 import { log } from "./index";
+import { generateMaze } from "./maze";
 import {
   type GameState,
   type Player,
@@ -13,7 +14,6 @@ import {
   GamePhase,
   PLAYER_COLORS,
   MAP_CONFIG,
-  OBSTACLES,
 } from "@shared/schema";
 
 interface SocketData {
@@ -46,49 +46,64 @@ function rectIntersectsRect(r1: { x: number, y: number, w: number, h: number }, 
     r1.y + r1.h > r2.y);
 }
 
-function getRandomSpawnPosition(): { x: number; y: number } {
-  const padding = MAP_CONFIG.playerRadius * 3;
+function getRandomSpawnPosition(walls: { x: number, y: number, w: number, h: number }[]): { x: number; y: number } {
+  const CELL_SIZE = 120;
+  // Recalculate offsets to match maze.ts
+  const cols = Math.floor(MAP_CONFIG.width / CELL_SIZE);
+  const rows = Math.floor(MAP_CONFIG.height / CELL_SIZE);
+  const totalMazeWidth = cols * CELL_SIZE;
+  const totalMazeHeight = rows * CELL_SIZE;
+  const offsetX = (MAP_CONFIG.width - totalMazeWidth) / 2;
+  const offsetY = (MAP_CONFIG.height - totalMazeHeight) / 2;
+
   let attempts = 0;
-
   while (attempts < 100) {
-    const x = padding + Math.random() * (MAP_CONFIG.width - padding * 2);
-    const y = padding + Math.random() * (MAP_CONFIG.height - padding * 2);
+    // Pick random cell
+    const c = Math.floor(Math.random() * cols);
+    const r = Math.floor(Math.random() * rows);
 
-    // Check collision with obstacles
-    // Player rect estimate
+    // Center of cell
+    const x = offsetX + c * CELL_SIZE + CELL_SIZE / 2;
+    const y = offsetY + r * CELL_SIZE + CELL_SIZE / 2;
+
+    // Small jitter to not be perfectly centered?
+    // Let's add +/- 20px jitter
+    const jitterX = (Math.random() - 0.5) * 40;
+    const jitterY = (Math.random() - 0.5) * 40;
+
+    const finalX = x + jitterX;
+    const finalY = y + jitterY;
+
+    // check collisions with the internal pillars if any
     const pRect = {
-      x: x - MAP_CONFIG.playerRadius,
-      y: y - MAP_CONFIG.playerRadius,
+      x: finalX - MAP_CONFIG.playerRadius,
+      y: finalY - MAP_CONFIG.playerRadius,
       w: MAP_CONFIG.playerRadius * 2,
       h: MAP_CONFIG.playerRadius * 2
     };
 
-    const collision = OBSTACLES.some(obs => {
-      // Obstacle is centered, convert to corner-based for rectIntersectsRect
-      const obsRect = {
-        x: obs.x - obs.w / 2,
-        y: obs.y - obs.h / 2,
-        w: obs.w,
-        h: obs.h
+    const collision = walls.some(wall => {
+      const wallRect = {
+        x: wall.x - wall.w / 2,
+        y: wall.y - wall.h / 2,
+        w: wall.w,
+        h: wall.h
       };
-      return rectIntersectsRect(pRect, obsRect);
+      return rectIntersectsRect(pRect, wallRect);
     });
 
-    if (!collision) {
-      return { x, y };
-    }
+    if (!collision) return { x: finalX, y: finalY };
     attempts++;
   }
 
-  // Fallback (should be rare)
-  return {
-    x: padding + Math.random() * (MAP_CONFIG.width - padding * 2),
-    y: padding + Math.random() * (MAP_CONFIG.height - padding * 2),
-  };
+  // Fallback to center
+  return { x: MAP_CONFIG.width / 2, y: MAP_CONFIG.height / 2 };
 }
 
 function createPlayer(id: string, name: string, colorIndex: number): Player {
-  const spawn = getRandomSpawnPosition();
+  const spawn = getRandomSpawnPosition([]); // No walls in lobby essentially, or use OBSTACLES if we want waiting room to match?
+  // Actually, lobby doesn't have the maze yet. Maze is generated on startGame.
+  // So random spawn is fine.
   return {
     id,
     name,
@@ -116,6 +131,7 @@ function createGameState(roomCode: string, hostId: string): GameState {
     marcoRevealExpiry: null,
     winner: null,
     exploredAreas: [],
+    walls: [],
   };
 }
 
@@ -162,7 +178,8 @@ function isInVisionCone(
   seeker: Player,
   target: Player,
   visionAngle: number,
-  visionDistance: number
+  visionDistance: number,
+  walls: { x: number, y: number, w: number, h: number }[]
 ): boolean {
   const dx = target.x - seeker.x;
   const dy = target.y - seeker.y;
@@ -179,8 +196,8 @@ function isInVisionCone(
 
   if (angleDiff > visionAngle / 2) return false;
 
-  // Check Line of Sight against obstacles
-  const blocked = OBSTACLES.some(obs => lineIntersectsRect({ x: seeker.x, y: seeker.y }, { x: target.x, y: target.y }, obs));
+  // Check Line of Sight against walls
+  const blocked = walls.some(wall => lineIntersectsRect({ x: seeker.x, y: seeker.y }, { x: target.x, y: target.y }, wall));
   if (blocked) return false;
 
   return true;
@@ -241,6 +258,16 @@ export async function registerRoutes(
         return;
       }
 
+      if (gameState.players.some(p => p.name.toLowerCase() === playerName.toLowerCase())) {
+        callback(false, "Name already taken");
+        return;
+      }
+
+      if (gameState.players.some(p => p.name.toLowerCase() === playerName.toLowerCase())) {
+        callback(false, "Name already taken");
+        return;
+      }
+
       socket.data.roomCode = upperCode;
       socket.data.clientType = clientType;
       socket.join(upperCode);
@@ -288,8 +315,10 @@ export async function registerRoutes(
       const seekerId = gameState.players[seekerIndex].id;
       gameState.seekerId = seekerId;
 
+      gameState.walls = generateMaze();
+
       gameState.players.forEach((player, index) => {
-        const spawn = getRandomSpawnPosition();
+        const spawn = getRandomSpawnPosition(gameState.walls);
         player.x = spawn.x;
         player.y = spawn.y;
         player.angle = Math.random() * 360;
@@ -340,20 +369,45 @@ export async function registerRoutes(
       const player = gameState.players.find((p) => p.id === playerId);
       if (!player || player.status !== PlayerStatus.ALIVE) return;
 
-      player.x = Math.max(MAP_CONFIG.playerRadius, Math.min(MAP_CONFIG.width - MAP_CONFIG.playerRadius, x));
-      player.y = Math.max(MAP_CONFIG.playerRadius, Math.min(MAP_CONFIG.height - MAP_CONFIG.playerRadius, y));
+      // Collision check with walls
+      let testRect = {
+        x: x - MAP_CONFIG.playerRadius,
+        y: y - MAP_CONFIG.playerRadius,
+        w: MAP_CONFIG.playerRadius * 2,
+        h: MAP_CONFIG.playerRadius * 2
+      };
+
+      const collision = gameState.walls.some(wall => {
+        const wallRect = {
+          x: wall.x - wall.w / 2,
+          y: wall.y - wall.h / 2,
+          w: wall.w,
+          h: wall.h
+        };
+        return rectIntersectsRect(testRect, wallRect);
+      });
+
+      if (!collision) {
+        player.x = Math.max(MAP_CONFIG.playerRadius, Math.min(MAP_CONFIG.width - MAP_CONFIG.playerRadius, x));
+        player.y = Math.max(MAP_CONFIG.playerRadius, Math.min(MAP_CONFIG.height - MAP_CONFIG.playerRadius, y));
+      }
       player.angle = angle;
 
-      if (player.role === PlayerRole.SEEKER) {
-        gameState.exploredAreas.push({
-          x: player.x,
-          y: player.y,
-          radius: MAP_CONFIG.seekerVisionDistance,
-        });
+      // Update explored areas for ALL alive players (Runners + Seeker)
+      const visionRadius = player.role === PlayerRole.SEEKER
+        ? MAP_CONFIG.seekerVisionDistance
+        : MAP_CONFIG.runnerVisionRadius;
 
-        if (gameState.exploredAreas.length > 500) {
-          gameState.exploredAreas = gameState.exploredAreas.slice(-300);
-        }
+      gameState.exploredAreas.push({
+        x: player.x,
+        y: player.y,
+        radius: visionRadius,
+        source: player.role === PlayerRole.SEEKER ? "seeker" : "runner"
+      });
+
+      // significantly increased limit to prevent history loss
+      if (gameState.exploredAreas.length > 20000) {
+        gameState.exploredAreas = gameState.exploredAreas.slice(-15000);
       }
     });
 
@@ -504,7 +558,8 @@ export async function registerRoutes(
             seeker,
             runner,
             MAP_CONFIG.seekerVisionAngle,
-            MAP_CONFIG.seekerVisionDistance
+            MAP_CONFIG.seekerVisionDistance,
+            gameState.walls
           );
 
           if (inVision) {

@@ -20,6 +20,7 @@ export function TVLobby({ roomCode }: TVLobbyProps) {
     toast({
       title: "Copied!",
       description: "Room code copied to clipboard",
+      duration: 2000,
     });
   };
 

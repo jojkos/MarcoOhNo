@@ -26,6 +26,7 @@ The game is built on a **Client-Server architecture**:
 *   **Generation Logic**: The server generates a unique maze for every round using a **Recursive Backtracker** algorithm.
 *   **Braiding**: The algorithm includes a "braiding" step that removes 10% of dead ends, creating loops. This ensures players don't get stuck in single-path corridors, allowing for juking and flanking.
 *   **Walls**: Walls are physical obstacles that block both **Movement** (physics collision) and **Vision** (raycasting shadows).
+*   **Smooth Movement**: Mobile clients implement client-side prediction and interpolation for responsive control.
 
 ### Catching Logic
 A Runner is "Caught" when they are:
@@ -40,28 +41,35 @@ A Runner is "Caught" when they are:
 *   **Visuals**:
     *   A massive, pulsing **Purple Ring** expands at that Runner's exact location.
     *   The text **"OH NO!"** floats up from their character.
-    *   **Visibility**: This effect is rendered at **Depth 2000** (above the Fog of War). It pierces through the darkness, allowing the Seeker (and TV spectators) to instantly locate the victim, even if they are currently mapped in the fog.
+    *   **Visibility**: This effect is rendered at **Depth 2000** (above the Fog of War, which is Depth 1000). It pierces through the darkness, allowing the Seeker (and TV spectators) to instantly locate the victim.
 
 ---
 
 ## 3. Visual Systems
 
 ### Fog of War (FoW)
-The game relies heavily on atmospheric tension created by limited information. The FoW is implemented using Phaser's **Geometry Masking**.
+The game relies heavily on atmospheric tension created by limited information. The FoW is implemented using two different techniques depending on the view:
 
-*   **The Fog Layer**: A full-screen black rectangle (`Color: #050810`, `Alpha: 0.9`) covers the entire map at **Depth 1000**.
-*   **The Reveal (Masking)**:
-    *   We do not "paint" light; we "erase" darkness.
-    *   The `fogGraphics` layer uses `BlendMode.ERASE` to cut holes where players can see.
-    *   This ensures that "darkness" is the default state, and unknown areas remain genuinely hidden.
+#### TV View Implementation (Erasure)
+*   **The Fog Layer**: A full-screen black rectangle (`Color: #050810`, `Alpha: 0.85`) covers the map at **Depth 1000**.
+*   **The Reveal**: Uses `BlendMode.ERASE` to cut holes in the fog texture directly.
+*   **Persistent Trail**: As the Seeker moves, their explored path is permanently "erased" from the fog.
+
+#### Mobile View Implementation (Inverted Mask)
+*   **The Fog Layer**: A full-screen black rectangle (`Color: #000000`, `Alpha: 1.0`) covers the map at **Depth 1000**.
+*   **The Reveal**: Uses a Phaser **Geometry Mask** with `invertAlpha = true`.
+*   **Logic**:
+    *   A separate, invisible `maskGraphics` object draws shapes in white (vision cones, local circles).
+    *   The mask makes the black fog *transparent* wherever `maskGraphics` has content.
+    *   This provides a crisp, performant way to show only the local player's vicinity.
 
 ### Visibility Rules
 *   **Seeker**:
-    *   Project a yellow **Vision Cone** (flashlight).
-    *   Walls cast dynamic shadows (implemented via raycasting polygons).
+    *   Projects a yellow **Vision Cone** (flashlight) calculated via raycasting (does not pass through walls).
+    *   TV View shows this cone cutting through the darkness.
 *   **Runners**:
     *   Have a simple 360° **Personal Light** with a small radius (120px).
-    *   Cannot see through walls.
+    *   Cannot see through walls (though the simple circle radius might clip through walls visually, the game logic prevents seeing players behind them).
 
 ---
 
@@ -72,17 +80,17 @@ The TV is the "God View" intended for the audience and the Seeker reference.
 *   **Camera**: Fixed, showing the entire Map.
 *   **Fog Behavior**:
     *   Starts mostly black.
-    *   **Persistent Trail**: As the Seeker moves, their path is permanently "etched" into the map (server stores `exploredAreas`). The TV shows where the Seeker has *been*.
-    *   **Real-time**: Shows the Seeker's current flashlight cone live.
-    *   **Note**: Runners outside the Seeker's explored path are **Hidden** from the TV view (unless they are caught or "Marco'd"). This prevents the TV from ghosting/cheating for the Seeker.
+    *   **Persistent Trail**: Stores `exploredAreas` (radius circles) on the server. The TV reveals where the Seeker has *been*.
+    *   **Current Vision**: Shows the Seeker's current flashlight live.
+    *   **Hiding Runners**: Runners outside the Seeker's explored areas are strictly hidden (covered by the black fog layer). "Marco" reveals pierce this fog.
 
 ### 📱 Mobile View (The Controller)
 Personalized view for each player.
-*   **Camera**: Locked to the specific player's coordinates.
-*   **Controls**: on-screen D-Pad / Joystick.
+*   **Camera**: Smoothly follows the player (`startFollow` with lerp).
+*   **Controls**: On-screen Joystick (D-Pad fallback).
 *   **Fog Behavior**:
-    *   **Local Vision Only**: Players only see what is immediately around them.
-    *   **No Memory**: Unlike RTS games, the Mobile view typically does not retain a "visited" map (or retains only a limited trail). If you walk away, the area goes dark again. This creates disorientation logic essential for the maze gameplay.
+    *   **Local Vision Only**: Players only see their immediate surroundings.
+    *   **No Memory**: The map goes dark again when you leave an area. This is critical for the "maze" feeling.
 *   **Feedback**:
     *   Screen shakes when caught.
     *   "Progress Bar" appears above head when being hunted by Seeker.
@@ -95,30 +103,28 @@ Personalized view for each player.
 *   **`routes.ts`**: The brain. Runs the game loop at **30 ticks/second**.
     *   Updates physics positions.
     *   Calculates "Catch Progress" for every runner-seeker pair.
-    *   Manages timers and Game Phase state (Lobby -> Role Reveal -> Playing -> Game Over).
-*   **`maze.ts`**: Standalone module for generating the `Wall[]` data structure.
+    *   Manages timers and Game Phase state.
+*   **`maze.ts`**: Standalone module for generating the `Wall[]` data structure via Recursive Backtracker.
 
 ### Client (`client/`)
-*   **`PhaserGame.tsx`**: Unified rendering component.
-    *   Accepts `isTVView` prop to toggle behavior.
-    *   **Reconciliation**: Uses "Optimistic UI" for local player movement (instant feedback) but interpolates remote players based on server updates (smooth lag compensation).
-*   **`GameHUD.tsx`**: React overlay for non-canvas UI (Timer, Lobby Codes, Winner screens).
+*   **`PhaserGame.tsx`**: TV View rendering component (Erasure-style Fog).
+*   **`MobileGameView.tsx`**: Mobile View rendering component (Mask-style Fog).
+*   **`WelcomeScreen.tsx`**: Main entry screen using the "Marco Oh No" Logo.
 
 ### Shared (`shared/`)
-*   **`physics.ts`**: Shared collision math (`rectIntersectsRect`, `lineIntersectsRect`).
-    *   Used by **Server** to validate moves (prevent cheating/wall clipping).
-    *   Used by **Client** to predict wall slides.
+*   **`physics.ts`**: Shared collision math.
+*   **`schema.ts`**: Shared types and Zod schemas.
 
 ---
 
 ## 6. Configuration & Tweaking
 
-Core constants are located in `shared/schema.ts` and `shared/assets.ts` for quick balancing:
+Core constants are located in `shared/schema.ts` and `shared/assets.ts`:
 
 *   **`MAP_CONFIG`** (`shared/schema.ts`):
     *   `seekerVisionDistance`: How far the flashlight goes (default: 180).
     *   `seekerVisionAngle`: Width of the cone (default: 60 degrees).
     *   `catchDuration`: Time to catch a runner (default: 2000ms).
     *   `gameDuration`: Round time (default: 60s).
-*   **`ASSET_CONFIG`** (`shared/assets.ts`):
-    *   Central place for file paths (images/sounds) and color palettes.
+    *   `playerRadius`: Size of player hitbox (default: 16).
+

@@ -3,7 +3,7 @@ import Phaser from "phaser";
 import { useGameStore } from "@/lib/gameStore";
 import { MAP_CONFIG, type Player, type GameState } from "@shared/schema";
 import { GameHUD } from "./GameHUD";
-import { calculateVisionPolygon } from "@/lib/vision";
+import { calculateVisionPolygon, isPointVisible } from "@/lib/vision";
 
 class TVGameScene extends Phaser.Scene {
   private players: Map<string, Phaser.GameObjects.Container> = new Map();
@@ -44,25 +44,7 @@ class TVGameScene extends Phaser.Scene {
       gridGraphics.lineBetween(0, y, width, y);
     }
 
-    const obstaclePositions = [
-      { x: 200, y: 200, w: 80, h: 80 },
-      { x: 400, y: 150, w: 120, h: 60 },
-      { x: 600, y: 300, w: 60, h: 120 },
-      { x: 900, y: 200, w: 100, h: 100 },
-      { x: 300, y: 500, w: 80, h: 80 },
-      { x: 700, y: 550, w: 150, h: 60 },
-      { x: 1000, y: 450, w: 80, h: 120 },
-      { x: 150, y: 650, w: 100, h: 80 },
-      { x: 500, y: 700, w: 60, h: 60 },
-      { x: 850, y: 680, w: 120, h: 80 },
-    ];
-
-    obstaclePositions.forEach(obs => {
-      const obstacle = this.add.rectangle(obs.x, obs.y, obs.w, obs.h, 0x2a3f5f);
-      obstacle.setStrokeStyle(2, 0x3d5a80);
-      obstacle.setDepth(10);
-      this.obstacles.push(obstacle);
-    });
+    // Walls are now dynamic from GameState
   }
 
   updateGameState(state: GameState) {
@@ -71,6 +53,27 @@ class TVGameScene extends Phaser.Scene {
     this.updateRipMarkers();
     this.updateMarcoReveals();
     this.updateFogOfWar();
+
+    // Update map walls from server
+    if (state.walls) {
+      this.drawMapWalls(state.walls);
+    }
+  }
+
+  drawMapWalls(walls: { x: number, y: number, w: number, h: number }[]) {
+    // Clear existing walls
+    this.obstacles.forEach(obs => obs.destroy());
+    this.obstacles = [];
+
+    // Draw new walls
+    walls.forEach(wall => {
+      const rect = this.add.rectangle(
+        wall.x, wall.y, wall.w, wall.h, 0x2a3f5f
+      );
+      rect.setStrokeStyle(2, 0x3d5a80);
+      rect.setDepth(10);
+      this.obstacles.push(rect);
+    });
   }
 
   updatePlayers() {
@@ -115,13 +118,16 @@ class TVGameScene extends Phaser.Scene {
           angleDiff = Math.abs(angleDiff);
 
           if (angleDiff <= MAP_CONFIG.seekerVisionAngle / 2) {
-            // Check LOS using our poly algo or just assume visible if in cone 
-            // to match the visual "shining on them" feedback.
-            // Since calculateVisionPolygon is running for the cone, 
-            // ideally checking if point in polygon is exact.
-            // For now, let's use the same simple check + LOS if possible,
-            // or just the Cone check for improved responsiveness.
-            visible = true;
+            // Check LOS to ensure walls block vision
+            const hasLineOfSight = isPointVisible(
+              { x: seeker.x, y: seeker.y },
+              { x: player.x, y: player.y },
+              this.gameState?.walls || []
+            );
+
+            if (hasLineOfSight) {
+              visible = true;
+            }
           }
         }
       }
@@ -223,7 +229,13 @@ class TVGameScene extends Phaser.Scene {
     const origin = { x: container.x, y: container.y };
 
     // Calculate polygon in global space
-    const polygonPoints = calculateVisionPolygon(origin, angle, seekerVisionAngle, seekerVisionDistance);
+    const polygonPoints = calculateVisionPolygon(
+      origin,
+      angle,
+      seekerVisionAngle,
+      seekerVisionDistance,
+      this.gameState?.walls || []
+    );
 
     // Map back to local space
     const localPoints = polygonPoints.map(p => ({ x: p.x - origin.x, y: p.y - origin.y }));
@@ -384,15 +396,17 @@ class TVGameScene extends Phaser.Scene {
     const seeker = this.gameState.players.find(p => p.role === "seeker");
     if (seeker) {
       const { seekerVisionAngle, seekerVisionDistance } = MAP_CONFIG;
-      const startAngle = Phaser.Math.DegToRad(seeker.angle - seekerVisionAngle / 2);
-      const endAngle = Phaser.Math.DegToRad(seeker.angle + seekerVisionAngle / 2);
 
-      maskShape.beginPath();
-      maskShape.moveTo(seeker.x, seeker.y);
-      maskShape.arc(seeker.x, seeker.y, seekerVisionDistance, startAngle, endAngle, false);
-      maskShape.closePath();
-      maskShape.fillPath();
+      // Use the same polygon calculation as the visual cone to respect walls
+      const polygonPoints = calculateVisionPolygon(
+        { x: seeker.x, y: seeker.y },
+        seeker.angle,
+        seekerVisionAngle,
+        seekerVisionDistance,
+        this.gameState?.walls || []
+      );
 
+      maskShape.fillPoints(polygonPoints, true, true);
       maskShape.fillCircle(seeker.x, seeker.y, 60);
     }
 

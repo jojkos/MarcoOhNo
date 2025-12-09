@@ -1,5 +1,3 @@
-import { OBSTACLES } from "@shared/schema";
-
 interface Point {
     x: number;
     y: number;
@@ -10,6 +8,7 @@ export function calculateVisionPolygon(
     angleDeg: number,
     fovDeg: number,
     radius: number,
+    walls: { x: number, y: number, w: number, h: number }[],
     rayCount: number = 60
 ): Point[] {
     const points: Point[] = [origin];
@@ -28,8 +27,8 @@ export function calculateVisionPolygon(
         let closestPoint = rayEnd;
         let minDistSq = radius * radius;
 
-        // Check intersection with all obstacles
-        for (const obs of OBSTACLES) {
+        // Check intersection with all walls
+        for (const obs of walls) {
             const intersection = getRayRectIntersection(origin, rayEnd, obs);
             if (intersection) {
                 const dx = intersection.x - origin.x;
@@ -107,4 +106,41 @@ function getLineIntersection(p1: Point, p2: Point, p3: Point, p4: Point): Point 
         };
     }
     return null;
+}
+
+export function isPointVisible(
+    origin: Point,
+    target: Point,
+    walls: { x: number, y: number, w: number, h: number }[]
+): boolean {
+    // Check if line segment intersects any wall
+    for (const wall of walls) {
+        // Simple bounding box check first
+        const minX = Math.min(origin.x, target.x);
+        const maxX = Math.max(origin.x, target.x);
+        const minY = Math.min(origin.y, target.y);
+        const maxY = Math.max(origin.y, target.y);
+
+        const left = wall.x - wall.w / 2;
+        const right = wall.x + wall.w / 2;
+        const top = wall.y - wall.h / 2;
+        const bottom = wall.y + wall.h / 2;
+
+        if (maxX < left || minX > right || maxY < top || minY > bottom) continue;
+
+        // Detailed intersection check
+        const intersection = getRayRectIntersection(origin, target, wall);
+        if (intersection) {
+            // Check if intersection is strictly between origin and target (excluding endpoints usually, but here obstacles are solid)
+            // getRayRectIntersection returns closest point on ray. We need to check if it's closer than target.
+            const distToTargetSq = (target.x - origin.x) ** 2 + (target.y - origin.y) ** 2;
+            const distToHitSq = (intersection.x - origin.x) ** 2 + (intersection.y - origin.y) ** 2;
+
+            // If hit is closer than target (with small epsilon), then blocked
+            if (distToHitSq < distToTargetSq - 0.1) {
+                return false;
+            }
+        }
+    }
+    return true;
 }

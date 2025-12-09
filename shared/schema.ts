@@ -59,7 +59,13 @@ export const gameStateSchema = z.object({
   marcoRevealPlayerId: z.string().nullable(),
   marcoRevealExpiry: z.number().nullable(),
   winner: z.enum(["seeker", "runners"]).nullable(),
-  exploredAreas: z.array(z.object({ x: z.number(), y: z.number(), radius: z.number() })),
+  exploredAreas: z.array(z.object({
+    x: z.number(),
+    y: z.number(),
+    radius: z.number(),
+    source: z.enum(["seeker", "runner"]).optional()
+  })),
+  walls: z.array(z.object({ x: z.number(), y: z.number(), w: z.number(), h: z.number() })),
 });
 
 export type GameState = z.infer<typeof gameStateSchema>;
@@ -88,18 +94,7 @@ export const MAP_CONFIG = {
   gameDuration: 60000,
 };
 
-export const OBSTACLES = [
-  { x: 200, y: 200, w: 80, h: 80 },
-  { x: 400, y: 150, w: 120, h: 60 },
-  { x: 600, y: 300, w: 60, h: 120 },
-  { x: 900, y: 200, w: 100, h: 100 },
-  { x: 300, y: 500, w: 80, h: 80 },
-  { x: 700, y: 550, w: 150, h: 60 },
-  { x: 1000, y: 450, w: 80, h: 120 },
-  { x: 150, y: 650, w: 100, h: 80 },
-  { x: 500, y: 700, w: 60, h: 60 },
-  { x: 850, y: 680, w: 120, h: 80 },
-];
+
 
 export const insertPlayerSchema = playerSchema.omit({ id: true, catchProgress: true, ripPosition: true });
 export type InsertPlayer = z.infer<typeof insertPlayerSchema>;

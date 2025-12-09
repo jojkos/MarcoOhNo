@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Flashlight, Users, Tv, Smartphone } from "lucide-react";
+import { Logo } from "@/components/ui/Logo";
 import { useGameStore } from "@/lib/gameStore";
 import { socket, connectSocket } from "@/lib/socket";
 import { ClientType } from "@shared/schema";
@@ -23,7 +24,7 @@ export function WelcomeScreen({ onRoomCreated, onRoomJoined }: WelcomeScreenProp
     setIsLoading(true);
     setError(null);
     connectSocket();
-    
+
     socket.emit("createRoom", ClientType.TV, (code) => {
       setClientType(ClientType.TV);
       storeSetRoomCode(code);
@@ -65,24 +66,21 @@ export function WelcomeScreen({ onRoomCreated, onRoomJoined }: WelcomeScreenProp
         <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-primary/5 rounded-full blur-3xl" />
         <div className="absolute bottom-1/4 right-1/4 w-64 h-64 bg-game-seeker/5 rounded-full blur-3xl" />
       </div>
-      
-      <div className="relative z-10 text-center mb-8 animate-fade-in">
-        <div className="flex items-center justify-center gap-3 mb-4">
-          <Flashlight className="w-12 h-12 text-game-vision" />
-          <h1 className="font-display text-5xl md:text-7xl font-bold tracking-wider text-foreground">
-            SHADOW RUN
-          </h1>
+
+      {mode === "select" && (
+        <div className="relative z-10 text-center mb-8 animate-fade-in group hover:scale-105 transition-transform duration-500">
+          <Logo />
+          <p className="text-muted-foreground text-lg font-game mt-6">
+            Hunt or be hunted in the shadows
+          </p>
         </div>
-        <p className="text-muted-foreground text-lg font-game">
-          Hunt or be hunted in the shadows
-        </p>
-      </div>
+      )}
 
       {mode === "select" && (
         <div className="flex flex-col md:flex-row gap-4 w-full max-w-2xl animate-scale-in">
-          <Card 
+          <Card
             className="flex-1 hover-elevate cursor-pointer transition-all"
-            onClick={() => setMode("create")}
+            onClick={handleCreateGame}
             data-testid="card-create-game"
           >
             <CardHeader className="text-center pb-2">
@@ -98,7 +96,7 @@ export function WelcomeScreen({ onRoomCreated, onRoomJoined }: WelcomeScreenProp
             </CardContent>
           </Card>
 
-          <Card 
+          <Card
             className="flex-1 hover-elevate cursor-pointer transition-all"
             onClick={() => setMode("join")}
             data-testid="card-join-game"
@@ -131,15 +129,15 @@ export function WelcomeScreen({ onRoomCreated, onRoomJoined }: WelcomeScreenProp
               This screen will become the main game display. Others will join using their phones.
             </p>
             <div className="flex gap-2">
-              <Button 
-                variant="outline" 
+              <Button
+                variant="outline"
                 onClick={() => setMode("select")}
                 className="flex-1"
                 data-testid="button-back"
               >
                 Back
               </Button>
-              <Button 
+              <Button
                 onClick={handleCreateGame}
                 disabled={isLoading}
                 className="flex-1"
@@ -203,8 +201,8 @@ export function WelcomeScreen({ onRoomCreated, onRoomJoined }: WelcomeScreenProp
               </p>
             )}
             <div className="flex gap-2">
-              <Button 
-                variant="outline" 
+              <Button
+                variant="outline"
                 onClick={() => {
                   setMode("select");
                   setError(null);
@@ -214,7 +212,7 @@ export function WelcomeScreen({ onRoomCreated, onRoomJoined }: WelcomeScreenProp
               >
                 Back
               </Button>
-              <Button 
+              <Button
                 onClick={handleJoinGame}
                 disabled={isLoading || roomCode.length !== 4 || !playerName.trim()}
                 className="flex-1"

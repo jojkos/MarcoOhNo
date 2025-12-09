@@ -17,19 +17,19 @@ import { ClientType, GamePhase, type PlayerRole } from "@shared/schema";
 type Screen = "welcome" | "lobby" | "role_reveal" | "playing" | "game_over";
 
 function GameApp() {
-  const { 
-    clientType, 
-    roomCode, 
-    gameState, 
+  const {
+    clientType,
+    roomCode,
+    gameState,
     revealedRole,
-    setConnected, 
-    setGameState, 
+    setConnected,
+    setGameState,
     setPlayerId,
     setRevealedRole,
     setError,
-    reset 
+    reset
   } = useGameStore();
-  
+
   const [screen, setScreen] = useState<Screen>("welcome");
 
   useEffect(() => {
@@ -43,7 +43,7 @@ function GameApp() {
 
     socket.on("gameState", (state) => {
       setGameState(state);
-      
+
       if (!useGameStore.getState().playerId && clientType === ClientType.MOBILE) {
         const playerName = useGameStore.getState().playerName;
         const player = state.players.find(p => p.name === playerName);
@@ -51,21 +51,28 @@ function GameApp() {
           setPlayerId(player.id);
         }
       }
-      
-      if (state.phase === GamePhase.ROLE_REVEAL && screen === "lobby") {
-        const player = state.players.find(p => p.id === useGameStore.getState().playerId);
+
+      const currentPlayerId = useGameStore.getState().playerId;
+
+      // Handle Phase Transitions
+      if (state.phase === GamePhase.ROLE_REVEAL) {
+        const player = state.players.find(p => p.id === currentPlayerId);
         if (player) {
           setRevealedRole(player.role as PlayerRole);
-          setScreen("role_reveal");
+          // Only show reveal if we're not already playing (avoids loops if animation finishes before phase change)
+          if (screen !== "role_reveal" && screen !== "playing") setScreen("role_reveal");
         } else if (clientType === ClientType.TV) {
+          if (screen !== "playing") setScreen("playing");
+        }
+      } else if (state.phase === GamePhase.PLAYING) {
+        if (screen !== "playing") {
+          // Force switch to playing, even if role_reveal is showing (prevents stuck state)
           setScreen("playing");
         }
-      } else if (state.phase === GamePhase.PLAYING && screen !== "playing" && screen !== "role_reveal") {
-        setScreen("playing");
-      } else if (state.phase === GamePhase.GAME_OVER && screen !== "game_over") {
-        setScreen("game_over");
-      } else if (state.phase === GamePhase.LOBBY && screen !== "lobby" && screen !== "welcome") {
-        setScreen("lobby");
+      } else if (state.phase === GamePhase.GAME_OVER) {
+        if (screen !== "game_over") setScreen("game_over");
+      } else if (state.phase === GamePhase.LOBBY) {
+        if (screen !== "lobby" && screen !== "welcome") setScreen("lobby");
       }
     });
 
@@ -107,7 +114,7 @@ function GameApp() {
 
   if (screen === "welcome") {
     return (
-      <WelcomeScreen 
+      <WelcomeScreen
         onRoomCreated={handleRoomCreated}
         onRoomJoined={handleRoomJoined}
       />
@@ -123,9 +130,9 @@ function GameApp() {
 
   if (screen === "role_reveal" && revealedRole) {
     return (
-      <RoleReveal 
-        role={revealedRole} 
-        onComplete={handleRoleRevealComplete} 
+      <RoleReveal
+        role={revealedRole}
+        onComplete={handleRoleRevealComplete}
       />
     );
   }
@@ -139,7 +146,7 @@ function GameApp() {
 
   if (screen === "game_over" && gameState?.winner) {
     return (
-      <GameOver 
+      <GameOver
         winner={gameState.winner}
         onPlayAgain={handlePlayAgain}
         onLeave={handleLeave}
@@ -149,7 +156,7 @@ function GameApp() {
   }
 
   return (
-    <WelcomeScreen 
+    <WelcomeScreen
       onRoomCreated={handleRoomCreated}
       onRoomJoined={handleRoomJoined}
     />

@@ -9,6 +9,7 @@ class TVGameScene extends Phaser.Scene {
   private players: Map<string, Phaser.GameObjects.Container> = new Map();
   private ripMarkers: Map<string, Phaser.GameObjects.Container> = new Map();
   private marcoReveals: Map<string, Phaser.GameObjects.Container> = new Map();
+  private maskGraphics!: Phaser.GameObjects.Graphics;
   private fogGraphics!: Phaser.GameObjects.Graphics;
   private exploredGraphics!: Phaser.GameObjects.Graphics;
   private gameState: GameState | null = null;
@@ -27,6 +28,12 @@ class TVGameScene extends Phaser.Scene {
     this.fogGraphics.setDepth(1000);
     this.fogGraphics.fillStyle(0x000000, 1);
     this.fogGraphics.fillRect(0, 0, MAP_CONFIG.width, MAP_CONFIG.height);
+
+    // Create persistent mask graphics
+    this.maskGraphics = this.make.graphics({ x: 0, y: 0 }, false);
+    const mask = this.maskGraphics.createGeometryMask();
+    mask.invertAlpha = true;
+    this.fogGraphics.setMask(mask);
   }
 
   createMap() {
@@ -385,17 +392,20 @@ class TVGameScene extends Phaser.Scene {
       }
     });
 
+    // No need to clear/fill fogGraphics every frame if it's static black rect
+    // But if we want to support resizing or verify it's there:
     this.fogGraphics.clear();
     this.fogGraphics.fillStyle(0x000000, 1);
     this.fogGraphics.fillRect(0, 0, width, height);
 
-    const maskShape = this.make.graphics({ x: 0, y: 0 });
-    maskShape.fillStyle(0xffffff);
+    // Clear and redraw the mask
+    this.maskGraphics.clear();
+    this.maskGraphics.fillStyle(0xffffff);
 
     this.gameState.exploredAreas.forEach(area => {
       // Only reveal areas explored by the seeker
       if (area.source === "seeker") {
-        maskShape.fillCircle(area.x, area.y, area.radius);
+        this.maskGraphics.fillCircle(area.x, area.y, area.radius);
       }
     });
 
@@ -412,11 +422,10 @@ class TVGameScene extends Phaser.Scene {
         this.gameState?.walls || []
       );
 
-      maskShape.fillPoints(polygonPoints, true, true);
-      maskShape.fillCircle(seeker.x, seeker.y, 60);
+      this.maskGraphics.fillPoints(polygonPoints, true, true);
+      this.maskGraphics.fillCircle(seeker.x, seeker.y, 60);
     }
-
-    const mask = maskShape.createGeometryMask();
+    const mask = this.maskGraphics.createGeometryMask();
     mask.invertAlpha = true;
     this.fogGraphics.setMask(mask);
   }

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef } from "react";
 import Phaser from "phaser";
 import { useGameStore } from "@/lib/gameStore";
 import { MAP_CONFIG, type Player, type GameState } from "@shared/schema";
@@ -378,8 +378,11 @@ class TVGameScene extends Phaser.Scene {
 
     this.exploredGraphics.clear();
     this.gameState.exploredAreas.forEach(area => {
-      this.exploredGraphics.fillStyle(0x1a2744, 0.3);
-      this.exploredGraphics.fillCircle(area.x, area.y, area.radius);
+      // Only show areas explored by the seeker
+      if (area.source === "seeker") {
+        this.exploredGraphics.fillStyle(0x1a2744, 0.3);
+        this.exploredGraphics.fillCircle(area.x, area.y, area.radius);
+      }
     });
 
     this.fogGraphics.clear();
@@ -390,7 +393,10 @@ class TVGameScene extends Phaser.Scene {
     maskShape.fillStyle(0xffffff);
 
     this.gameState.exploredAreas.forEach(area => {
-      maskShape.fillCircle(area.x, area.y, area.radius);
+      // Only reveal areas explored by the seeker
+      if (area.source === "seeker") {
+        maskShape.fillCircle(area.x, area.y, area.radius);
+      }
     });
 
     const seeker = this.gameState.players.find(p => p.role === "seeker");

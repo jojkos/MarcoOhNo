@@ -8,7 +8,9 @@ import { MobileControls } from "./MobileControls";
 import { calculateVisionPolygon } from "@/lib/vision";
 
 // Module-level variable to persist visited path across scene restarts (e.g. on resize or re-mount)
+// Module-level variable to persist visited path across scene restarts (e.g. on resize or re-mount)
 let persistentVisitedPath: { x: number, y: number, radius: number }[] = [];
+let persistentRoomCode: string | null = null;
 
 class MobileGameScene extends Phaser.Scene {
   private players: Map<string, Phaser.GameObjects.Container> = new Map();
@@ -123,12 +125,13 @@ class MobileGameScene extends Phaser.Scene {
   }
 
   updateGameState(state: GameState) {
-    // Clear visited path if we go back to lobby or significantly restart
-    if (this.lastPhase !== "lobby" && state.phase === "lobby") {
+    // Clear visited path if we go back to lobby or significantly restart OR if room code changed
+    if ((this.lastPhase !== "lobby" && state.phase === "lobby") || (persistentRoomCode && persistentRoomCode !== state.roomCode)) {
       persistentVisitedPath.length = 0;
       this.visitedPath = persistentVisitedPath;
       this.lastVisitedPos = null;
     }
+    persistentRoomCode = state.roomCode;
     this.lastPhase = state.phase;
 
     this.gameState = state;
@@ -570,9 +573,13 @@ class MobileGameScene extends Phaser.Scene {
       }
     }
 
-    // Determine target position
-    let nextX = localPlayer.x + dx * speed;
-    let nextY = localPlayer.y + dy * speed;
+    // Determine target position based on LOCAL container position (Client-side prediction)
+    // This prevents jitter when server update is lagging/rejecting
+    const container = this.players.get(localPlayer.id);
+    if (!container) return;
+
+    let nextX = container.x + dx * speed;
+    let nextY = container.y + dy * speed;
 
     // Check X Axis Collision
     let testRectX = { x: nextX - 16, y: localPlayer.y - 16, w: 32, h: 32 };
@@ -594,11 +601,11 @@ class MobileGameScene extends Phaser.Scene {
     });
 
     if (collidedX) {
-      nextX = localPlayer.x; // Block X movement
+      nextX = container.x; // Block X movement, stay at local position
       dx = 0;
     }
     if (collidedY) {
-      nextY = localPlayer.y; // Block Y movement
+      nextY = container.y; // Block Y movement, stay at local position
       dy = 0;
     }
 
@@ -608,11 +615,9 @@ class MobileGameScene extends Phaser.Scene {
     // Only emit if *actually* moving (and sliding counted as moving)
     // Emit if moving OR rotating
     const currentAngle = this.moveVector.angle;
-    const lastAngle = (localPlayer as any)._lastEmittedAngle || 0; // Use a temporary property on player object?
-    // Or better, store it in the container data or class property?
-    // Let's store it on the container data since we have access to it.
-    const container = this.players.get(localPlayer.id);
-    const lastEmittedAngle = container ? (container.getData('lastEmittedAngle') || 0) : 0;
+    
+    // Check previous angle from container data
+    const lastEmittedAngle = container.getData('lastEmittedAngle') || 0;
 
     // Check if angle changed significantly (e.g. > 0.1 degree)
     const angleChanged = Math.abs(currentAngle - lastEmittedAngle) > 0.1;
@@ -623,10 +628,8 @@ class MobileGameScene extends Phaser.Scene {
       localPlayer.x = clampedX;
       localPlayer.y = clampedY;
 
-      if (container) {
-        container.setPosition(clampedX, clampedY);
-        container.setData('lastEmittedAngle', currentAngle);
-      }
+      container.setPosition(clampedX, clampedY);
+      container.setData('lastEmittedAngle', currentAngle);
 
       socket.emit("movePlayer", clampedX, clampedY, currentAngle);
     }

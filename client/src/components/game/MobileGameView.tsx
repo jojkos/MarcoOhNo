@@ -29,6 +29,7 @@ class MobileGameScene extends Phaser.Scene {
   private moveVector = { x: 0, y: 0, angle: 0 };
   private obstacles: Phaser.GameObjects.Rectangle[] = [];
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
+
   private wasd!: {
     up: Phaser.Input.Keyboard.Key;
     down: Phaser.Input.Keyboard.Key;
@@ -199,9 +200,9 @@ class MobileGameScene extends Phaser.Scene {
         container.setData('targetAngle', player.angle);
       } else {
         // Local player: Check for desync (e.g. after respawn)
-        // If distance is large (> 50px), snap to server position
+        // If distance is large (> 150px), snap to server position
         const dist = Phaser.Math.Distance.Between(container.x, container.y, player.x, player.y);
-        if (dist > 50) {
+        if (dist > 150) {
           container.setPosition(player.x, player.y);
           // Also reset move vector to prevent "sliding" back
           // But we don't have direct access to moveVector inputs here easily without clearing them?
@@ -555,6 +556,12 @@ class MobileGameScene extends Phaser.Scene {
     if (this.moveVector.x !== 0 || this.moveVector.y !== 0) {
       dx = this.moveVector.x;
       dy = this.moveVector.y;
+      // Normalize joystick vector to ensure consistent speed (match WASD)
+      const len = Math.sqrt(dx * dx + dy * dy);
+      if (len > 0) {
+        dx /= len;
+        dy /= len;
+      }
     } else {
       // Keyboard controls
       if (this.cursors.left.isDown || this.wasd.left.isDown) dx = -1;

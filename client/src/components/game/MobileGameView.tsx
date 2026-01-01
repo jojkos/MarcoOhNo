@@ -504,7 +504,12 @@ class MobileGameScene extends Phaser.Scene {
   }
 
   setMoveVector(x: number, y: number, angle: number) {
-    this.moveVector = { x, y, angle };
+    // Preserve last angle if NaN is passed (e.g., on joystick release)
+    if (Number.isNaN(angle)) {
+      this.moveVector = { x, y, angle: this.moveVector.angle };
+    } else {
+      this.moveVector = { x, y, angle };
+    }
   }
 
   update(time: number, delta: number) {
@@ -588,8 +593,8 @@ class MobileGameScene extends Phaser.Scene {
     let nextX = container.x + dx * speed;
     let nextY = container.y + dy * speed;
 
-    // Check X Axis Collision
-    let testRectX = { x: nextX - 16, y: localPlayer.y - 16, w: 32, h: 32 };
+    // Check X Axis Collision - use container.y for consistent coordinates
+    let testRectX = { x: nextX - 16, y: container.y - 16, w: 32, h: 32 };
     const walls = this.gameState.walls || [];
     const collidedX = walls.some(obs => {
       return (testRectX.x < obs.x + obs.w / 2 &&
@@ -598,8 +603,8 @@ class MobileGameScene extends Phaser.Scene {
         testRectX.y + testRectX.h > obs.y - obs.h / 2);
     });
 
-    // Check Y Axis Collision
-    let testRectY = { x: localPlayer.x - 16, y: nextY - 16, w: 32, h: 32 };
+    // Check Y Axis Collision - use container.x for consistent coordinates
+    let testRectY = { x: container.x - 16, y: nextY - 16, w: 32, h: 32 };
     const collidedY = walls.some(obs => {
       return (testRectY.x < obs.x + obs.w / 2 &&
         testRectY.x + testRectY.w > obs.x - obs.w / 2 &&
@@ -751,7 +756,7 @@ export function MobileGameView() {
   }, []);
 
   return (
-    <div className="relative w-full h-screen bg-background overflow-hidden">
+    <div className="relative w-full h-[100dvh] bg-background overflow-hidden" style={{ height: '100dvh', minHeight: '-webkit-fill-available' }}>
       <div
         ref={containerRef}
         className="w-full h-full"

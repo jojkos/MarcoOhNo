@@ -69,7 +69,8 @@ export function MobileControls({ onMove }: MobileControlsProps) {
     setJoystickActive(false);
     setJoystickPos({ x: 0, y: 0 });
     setTouchId(null);
-    onMove(0, 0, 0);
+    // Pass NaN for angle to signal that the existing angle should be preserved
+    onMove(0, 0, Number.NaN);
   }, [onMove]);
 
   const handleMarco = () => {
@@ -113,7 +114,7 @@ export function MobileControls({ onMove }: MobileControlsProps) {
   }, [touchId, joystickActive, handleJoystickMove, handleJoystickEnd]);
 
   return (
-    <div className="absolute inset-x-0 bottom-0 p-4 pointer-events-none z-20">
+    <div className="absolute inset-x-0 bottom-0 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] pointer-events-none z-20">
       <div className="flex items-end justify-between gap-4">
         <div 
           ref={joystickRef}

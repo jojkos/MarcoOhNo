@@ -1,130 +1,89 @@
-# Marco Oh No! - System Reference & Mechanics
+# Marco Oh No! – System Reference
 
-## 1. System Overview
-"Marco Oh No!" is a **local multiplayer tag game** designed for a "couch party" setting. 
-- **The TV (Host)** acts as the central game board and spectator view.
-- **Mobile Phones (Clients)** act as individual controllers and private screens for each player.
+A couch-party hide-and-seek game. One screen everyone can see (the **TV**) shows the seeker's
+flashlight view; every player uses their **phone** as controller and private screen.
 
-The game is built on a **Client-Server architecture**:
-- **Server**: Authoritative game state, collision detection, and maze generation.
-- **Client**: Phaser 3 rendering engine for high-performance 2D graphics and lighting effects.
+## Game rules
 
----
+**Roles.** Each round, one player is the **Seeker** and everyone else is a **Runner**. The seeker
+rotates so everyone gets a turn, and points carry across rounds.
 
-## 2. Game Mechanics
+**Round phases** (`shared/protocol.ts` → `Phase`):
 
-### Roles
-*   **The Seeker (1 Player)**
-    *   **Goal**: Catch all Runners before time runs out.
-    *   **Ability**: Has a flashlight (Vision Cone) that reveals runners.
-    *   **Special**: "Marco" ability to reveal a random runner.
-*   **The Runners (Many Players)**
-    *   **Goal**: Survive until the timer reaches zero.
-    *   **Ability**: Can see a small radius around themselves. Hidden by fog otherwise.
+| Phase | Length | What happens |
+|---|---|---|
+| `reveal` | 3.5 s | TV announces the seeker; phones show your role. Nobody moves. |
+| `scatter` | 10 s | Runners see the whole maze lit and run to hide. The seeker is frozen and blind (TV is black). |
+| `hunt` | 150 s | Lights out. The TV shows only the seeker's flashlight. |
+| `round_over` | – | Results and scores. Host/VIP starts the next round or returns to the lobby. |
 
-### The Maze
-*   **Generation Logic**: The server generates a unique maze for every round using a **Recursive Backtracker** algorithm.
-*   **Braiding**: The algorithm includes a "braiding" step that removes 10% of dead ends, creating loops. This ensures players don't get stuck in single-path corridors, allowing for juking and flanking.
-*   **Walls**: Walls are physical obstacles that block both **Movement** (physics collision) and **Vision** (raycasting shadows).
-*   **Smooth Movement**: Mobile clients implement client-side prediction and interpolation for responsive control.
+**Win conditions.**
+- **Runners win** by collecting `orbsToWin` orbs as a team (`2 + 2 × runners`). A few orbs are on the map at a time; new ones appear as they're picked up.
+- **Seeker wins** if, at any moment, no runner is free (all caged or ghosts), **or** when the timer runs out. Hiding in a corner doesn't win; runners must play the objective.
 
-### Catching Logic
-A Runner is "Caught" when they are:
-1.  **Visible**: Within the Seeker's **Vision Cone** (60° arc) AND within **Distance** (180px).
-2.  **Line of Sight**: There are no walls between the Seeker and the Runner.
-3.  **Exposure Time**: The runner must be exposed for a defined duration (cumulative). The "Catch Progress" bar fills up when visible and decays when hidden.
-    *   *Result*: If the bar fills, the Runner dies, turns into a "RIP" marker, and their screen turns red.
+**Catching.** A runner inside the seeker's cone (70°, 250 px) or close aura (55 px), with line of
+sight, fills an exposure meter (1.6 s to fill, drains quickly when out of light).
+- 1st catch → **caged** at that spot. A free teammate standing next to the cage for ~2.2 s frees
+  them, with 3 s of invulnerability. Cages are visible to everyone, so the seeker can camp them.
+- 2nd catch → **ghost**. Ghosts float through walls, can't be caught or collect orbs, and can **BOO**.
 
-### "Marco" Ability
-*   **Trigger**: The Seeker presses the "Marco" button (15s cooldown).
-*   **Effect**: The Server selects one random *alive* Runner.
-*   **Visuals**:
-    *   A massive, pulsing **Purple Ring** expands at that Runner's exact location.
-    *   The text **"OH NO!"** floats up from their character.
-    *   **Visibility**: This effect is rendered at **Depth 2000** (above the Fog of War, which is Depth 1000). It pierces through the darkness, allowing the Seeker (and TV spectators) to instantly locate the victim.
+**Abilities** (cooldowns in `shared/config.ts` → `ABILITIES`):
+- Seeker: **POLO**: every free runner shows a ring near (not exactly at) their position. **SPRINT**: a short speed boost.
+- Runner: **DASH**: a short burst.
+- Ghost: **BOO**: a fake noise on the seeker's view. During a POLO it looks exactly like a real POLO ring.
 
----
+**Noise.** Picking up an orb, BOO, and standing still for 10 s ("sneeze") each make a ring on the seeker's view.
 
-## 3. Visual Systems
+**Scoring.** Seeker gets +1 per catch and +3 for a win. Runners get +1 per orb, +2 per rescue, and +3 each for a team win.
 
-### Fog of War (FoW)
-The game relies heavily on atmospheric tension created by limited information. The FoW is implemented using two different techniques depending on the view:
+## Architecture
 
-#### TV View Implementation (Erasure)
-*   **The Fog Layer**: A full-screen black rectangle (`Color: #050810`, `Alpha: 0.85`) covers the map at **Depth 1000**.
-*   **The Reveal**: Uses `BlendMode.ERASE` to cut holes in the fog texture directly.
-*   **Persistent Trail**: As the Seeker moves, their explored path is permanently "erased" from the fog.
+```
+shared/   config.ts    all tuning constants (speeds, vision, timers, scoring)
+          protocol.ts  wire types (RoomInfo, Snapshot, FxEvent, InputMsg, events)
+          physics.ts   deterministic movement + wall sliding (used by server AND client)
+          geometry.ts  raycasts, line of sight, light polygons, seekerSees()
+          maze.ts      maze generator (backtracker + braiding + plazas, merged walls)
+          rules.ts     ability mapping, frozen rules, movement context
+server/   routes.ts    socket.io wiring, room registry, 30 Hz loop, /api/lan
+          game/room.ts the authoritative game: lobby, rounds, input queue, catching, orbs…
+client/   lib/net.ts   socket handlers, session persistence/resume, snapshot buffer, actions
+          game/GameScene.ts  Phaser scene for both TV and phone views
+          game/predictor.ts  client-side prediction + reconciliation
+          game/input.ts      joystick/keyboard state
+          components/game/*  React screens (lobbies, HUDs, overlays, results)
+script/bots.ts           headless bots for solo playtesting
+tests/                   vitest: physics/maze/geometry, room rules, netcode
+```
 
-#### Mobile View Implementation (Inverted Mask)
-*   **The Fog Layer**: A full-screen black rectangle (`Color: #000000`, `Alpha: 1.0`) covers the map at **Depth 1000**.
-*   **The Reveal**: Uses a Phaser **Geometry Mask** with `invertAlpha = true`.
-*   **Logic**:
-    *   A separate, invisible `maskGraphics` object draws shapes in white (vision cones, local circles).
-    *   The mask makes the black fog *transparent* wherever `maskGraphics` has content.
-    *   This provides a crisp, performant way to show only the local player's vicinity.
+### Networking model
+- **Server-authoritative.** Phones send `input` messages (`seq`, joystick vector, ability
+  presses) at 30 Hz. The server applies each input as one fixed physics step. A per-player credit
+  budget (1 per tick, burst 4) stops speed hacks and absorbs jitter.
+- **Client prediction.** The phone applies its own inputs immediately with the same `stepMover`.
+  Each snapshot carries `ack` (the last processed seq); the phone rewinds to the server state and
+  replays the unacked inputs. Physics is deterministic, so corrections are near zero; any that remain fade out visually.
+  `tests/netcode.test.ts` checks this against the real `Room` with simulated latency.
+- **Interpolation.** Other players are drawn ~110 ms in the past, between two buffered snapshots.
+- **Messages.** `room` (lobby state + maze, only when it changes), `snap` (positions etc., every
+  tick, sent as volatile), `fx` (one-off events: polo, noise, caught, freed, orb).
+- **Reconnects.** The phone stores a seat token in `localStorage` and the TV stores a host token. After
+  a reload or a dropped Wi-Fi connection, the client re-attaches to the same seat. Disconnected players keep their
+  seat (lobby: 20 s grace). If the seeker is gone for 25 s, the round is cancelled. Empty rooms close after 10 minutes.
 
-### Visibility Rules
-*   **Seeker**:
-    *   Projects a yellow **Vision Cone** (flashlight) calculated via raycasting (does not pass through walls).
-    *   TV View shows this cone cutting through the darkness.
-*   **Runners**:
-    *   Have a simple 360° **Personal Light** with a small radius (120px).
-    *   Cannot see through walls (though the simple circle radius might clip through walls visually, the game logic prevents seeing players behind them).
+### Visibility
+The server decides who is lit (`SnapPlayer.lit`) using the same `seekerSees()` the client uses for drawing.
+- **TV / seeker phone:** fog with the cone + aura cut out. Walls the light touches are remembered in grey (map memory). Runners are drawn only when lit.
+- **Runner phone:** a small light circle blocked by walls. The whole maze stays as a grey outline because they saw it during scatter. Others are visible only inside your light.
+- **Ghost phone:** no fog.
+- **Everyone:** orbs and cages are always visible.
 
----
-
-## 4. Views & Screens
-
-### 📺 TV View (The Spectator)
-The TV is the "God View" intended for the audience and the Seeker reference.
-*   **Camera**: Fixed, showing the entire Map.
-*   **Fog Behavior**:
-    *   Starts mostly black.
-    *   **Persistent Trail**: Stores `exploredAreas` (radius circles) on the server. The TV reveals where the Seeker has *been*.
-    *   **Current Vision**: Shows the Seeker's current flashlight live.
-    *   **Hiding Runners**: Runners outside the Seeker's explored areas are strictly hidden (covered by the black fog layer). "Marco" reveals pierce this fog.
-
-### 📱 Mobile View (The Controller)
-Personalized view for each player.
-*   **Camera**: Smoothly follows the player (`startFollow` with lerp).
-*   **Controls**: On-screen Joystick (D-Pad fallback).
-*   **Fog Behavior**:
-    *   **Local Vision Only**: Players only see their immediate surroundings.
-    *   **No Memory**: The map goes dark again when you leave an area. This is critical for the "maze" feeling.
-*   **Feedback**:
-    *   Screen shakes when caught.
-    *   "Progress Bar" appears above head when being hunted by Seeker.
-
----
-
-## 5. Technical Architecture
-
-### Server (`server/`)
-*   **`routes.ts`**: The brain. Runs the game loop at **30 ticks/second**.
-    *   Updates physics positions.
-    *   Calculates "Catch Progress" for every runner-seeker pair.
-    *   Manages timers and Game Phase state.
-*   **`maze.ts`**: Standalone module for generating the `Wall[]` data structure via Recursive Backtracker.
-
-### Client (`client/`)
-*   **`PhaserGame.tsx`**: TV View rendering component (Erasure-style Fog).
-*   **`MobileGameView.tsx`**: Mobile View rendering component (Mask-style Fog).
-*   **`WelcomeScreen.tsx`**: Main entry screen using the "Marco Oh No" Logo.
-
-### Shared (`shared/`)
-*   **`physics.ts`**: Shared collision math.
-*   **`schema.ts`**: Shared types and Zod schemas.
-
----
-
-## 6. Configuration & Tweaking
-
-Core constants are located in `shared/schema.ts` and `shared/assets.ts`:
-
-*   **`MAP_CONFIG`** (`shared/schema.ts`):
-    *   `seekerVisionDistance`: How far the flashlight goes (default: 180).
-    *   `seekerVisionAngle`: Width of the cone (default: 60 degrees).
-    *   `catchDuration`: Time to catch a runner (default: 2000ms).
-    *   `gameDuration`: Round time (default: 60s).
-    *   `playerRadius`: Size of player hitbox (default: 16).
-
+## Running
+```
+npm install
+npm run dev          # http://localhost:5000 (TV) – phones join via QR / room code
+npm run bots -- ABCD 3   # add 3 bots to room ABCD
+npm test             # vitest
+npm run check        # typecheck
+npm run build && npm start
+```

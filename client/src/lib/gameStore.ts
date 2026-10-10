@@ -1,84 +1,41 @@
 import { create } from "zustand";
-import type { GameState, Player, ClientType, PlayerRole } from "@shared/schema";
+import type { Phase, RoomInfo, SnapPlayer } from "@shared/protocol";
+
+/** Slow-changing HUD data, refreshed from snapshots ~10x per second. */
+export interface Hud {
+  phase: Phase;
+  phaseLeft: number;
+  collected: number;
+  players: SnapPlayer[];
+  me: SnapPlayer | null;
+  /** Some runner is close to being caught (drives the TV's red pulse). */
+  danger: boolean;
+  /** 0..1 how close the seeker is to me (runners only). */
+  threat: number;
+}
+
+export type ClientKind = "tv" | "mobile";
 
 interface GameStore {
   connected: boolean;
-  setConnected: (connected: boolean) => void;
-  
-  clientType: ClientType | null;
-  setClientType: (type: ClientType) => void;
-  
+  kind: ClientKind | null;
   playerId: string | null;
-  setPlayerId: (id: string | null) => void;
-  
-  playerName: string;
-  setPlayerName: (name: string) => void;
-  
-  roomCode: string | null;
-  setRoomCode: (code: string | null) => void;
-  
-  gameState: GameState | null;
-  setGameState: (state: GameState | null) => void;
-  
-  revealedRole: PlayerRole | null;
-  setRevealedRole: (role: PlayerRole | null) => void;
-  
-  error: string | null;
-  setError: (error: string | null) => void;
-  
-  getPlayer: () => Player | null;
-  isHost: () => boolean;
-  isSeeker: () => boolean;
-  
-  reset: () => void;
+  room: RoomInfo | null;
+  hud: Hud | null;
+  /** True while trying to reattach to a saved session after load/reconnect. */
+  resuming: boolean;
 }
 
-export const useGameStore = create<GameStore>((set, get) => ({
+export const useGameStore = create<GameStore>(() => ({
   connected: false,
-  setConnected: (connected) => set({ connected }),
-  
-  clientType: null,
-  setClientType: (clientType) => set({ clientType }),
-  
+  kind: null,
   playerId: null,
-  setPlayerId: (playerId) => set({ playerId }),
-  
-  playerName: "",
-  setPlayerName: (playerName) => set({ playerName }),
-  
-  roomCode: null,
-  setRoomCode: (roomCode) => set({ roomCode }),
-  
-  gameState: null,
-  setGameState: (gameState) => set({ gameState }),
-  
-  revealedRole: null,
-  setRevealedRole: (revealedRole) => set({ revealedRole }),
-  
-  error: null,
-  setError: (error) => set({ error }),
-  
-  getPlayer: () => {
-    const { gameState, playerId } = get();
-    if (!gameState || !playerId) return null;
-    return gameState.players.find((p) => p.id === playerId) || null;
-  },
-  
-  isHost: () => {
-    const { gameState, playerId } = get();
-    return gameState?.hostId === playerId;
-  },
-  
-  isSeeker: () => {
-    const player = get().getPlayer();
-    return player?.role === "seeker";
-  },
-  
-  reset: () => set({
-    roomCode: null,
-    gameState: null,
-    revealedRole: null,
-    error: null,
-    playerId: null,
-  }),
+  room: null,
+  hud: null,
+  resuming: false,
 }));
+
+export function myLobbyPlayer() {
+  const { room, playerId } = useGameStore.getState();
+  return room?.players.find((p) => p.id === playerId) ?? null;
+}

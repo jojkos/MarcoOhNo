@@ -1,24 +1,10 @@
 import { io, Socket } from "socket.io-client";
-import type { ServerToClientEvents, ClientToServerEvents } from "@shared/schema";
+import type { ServerToClientEvents, ClientToServerEvents } from "@shared/protocol";
 
-const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-const wsUrl = `${protocol}//${window.location.host}`;
-
-export const socket: Socket<ServerToClientEvents, ClientToServerEvents> = io(wsUrl, {
+export const socket: Socket<ServerToClientEvents, ClientToServerEvents> = io({
   autoConnect: false,
+  transports: ["websocket"],
   reconnection: true,
-  reconnectionAttempts: 5,
-  reconnectionDelay: 1000,
+  reconnectionDelay: 500,
+  reconnectionDelayMax: 3000,
 });
-
-export function connectSocket() {
-  if (!socket.connected) {
-    socket.connect();
-  }
-}
-
-export function disconnectSocket() {
-  if (socket.connected) {
-    socket.disconnect();
-  }
-}

@@ -1,758 +1,182 @@
 import type { Express } from "express";
-import { type Server } from "http";
-import { Server as SocketIOServer } from "socket.io";
+import type { Server } from "http";
+import { networkInterfaces } from "os";
+import { Server as SocketIOServer, type Socket } from "socket.io";
 import { log } from "./index";
-import { generateMaze } from "./maze";
-import {
-  type GameState,
-  type Player,
-  type ClientType,
-  type ServerToClientEvents,
-  type ClientToServerEvents,
-  PlayerRole,
-  PlayerStatus,
-  GamePhase,
-  PLAYER_COLORS,
-  MAP_CONFIG,
-} from "@shared/schema";
+import { Room } from "./game/room";
+import { TICK_RATE, RULES } from "@shared/config";
+import type { ClientToServerEvents, ServerToClientEvents } from "@shared/protocol";
 
 interface SocketData {
-  roomCode: string | null;
+  code: string | null;
   playerId: string | null;
-  clientType: ClientType | null;
+  isHost: boolean;
 }
 
-const rooms = new Map<string, GameState>();
-const gameIntervals = new Map<string, NodeJS.Timeout>();
+type IO = SocketIOServer<ClientToServerEvents, ServerToClientEvents, {}, SocketData>;
+type GameSocket = Socket<ClientToServerEvents, ServerToClientEvents, {}, SocketData>;
 
-function generateRoomCode(): string {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let code = "";
-  for (let i = 0; i < 4; i++) {
-    code += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return rooms.has(code) ? generateRoomCode() : code;
-}
+const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
-function generatePlayerId(): string {
-  return Math.random().toString(36).substring(2, 9);
-}
-
-
-function rectIntersectsRect(r1: { x: number, y: number, w: number, h: number }, r2: { x: number, y: number, w: number, h: number }): boolean {
-  return (r1.x < r2.x + r2.w &&
-    r1.x + r1.w > r2.x &&
-    r1.y < r2.y + r2.h &&
-    r1.y + r1.h > r2.y);
-}
-
-function getRandomSpawnPosition(walls: { x: number, y: number, w: number, h: number }[]): { x: number; y: number } {
-  const CELL_SIZE = 120;
-  // Recalculate offsets to match maze.ts
-  const cols = Math.floor(MAP_CONFIG.width / CELL_SIZE);
-  const rows = Math.floor(MAP_CONFIG.height / CELL_SIZE);
-  const totalMazeWidth = cols * CELL_SIZE;
-  const totalMazeHeight = rows * CELL_SIZE;
-  const offsetX = (MAP_CONFIG.width - totalMazeWidth) / 2;
-  const offsetY = (MAP_CONFIG.height - totalMazeHeight) / 2;
-
-  let attempts = 0;
-  while (attempts < 100) {
-    // Pick random cell
-    const c = Math.floor(Math.random() * cols);
-    const r = Math.floor(Math.random() * rows);
-
-    // Center of cell
-    const x = offsetX + c * CELL_SIZE + CELL_SIZE / 2;
-    const y = offsetY + r * CELL_SIZE + CELL_SIZE / 2;
-
-    // Small jitter to not be perfectly centered?
-    // Let's add +/- 20px jitter
-    const jitterX = (Math.random() - 0.5) * 40;
-    const jitterY = (Math.random() - 0.5) * 40;
-
-    const finalX = x + jitterX;
-    const finalY = y + jitterY;
-
-    // check collisions with the internal pillars if any
-    const pRect = {
-      x: finalX - MAP_CONFIG.playerRadius,
-      y: finalY - MAP_CONFIG.playerRadius,
-      w: MAP_CONFIG.playerRadius * 2,
-      h: MAP_CONFIG.playerRadius * 2
-    };
-
-    const collision = walls.some(wall => {
-      const wallRect = {
-        x: wall.x - wall.w / 2,
-        y: wall.y - wall.h / 2,
-        w: wall.w,
-        h: wall.h
-      };
-      return rectIntersectsRect(pRect, wallRect);
-    });
-
-    if (!collision) return { x: finalX, y: finalY };
-    attempts++;
-  }
-
-  // Fallback to center
-  return { x: MAP_CONFIG.width / 2, y: MAP_CONFIG.height / 2 };
-}
-
-function createPlayer(id: string, name: string, colorIndex: number): Player {
-  const spawn = getRandomSpawnPosition([]); // No walls in lobby essentially, or use OBSTACLES if we want waiting room to match?
-  // Actually, lobby doesn't have the maze yet. Maze is generated on startGame.
-  // So random spawn is fine.
-  return {
-    id,
-    name,
-    color: PLAYER_COLORS[colorIndex % PLAYER_COLORS.length],
-    role: PlayerRole.NONE,
-    status: PlayerStatus.WAITING,
-    x: spawn.x,
-    y: spawn.y,
-    angle: 0,
-    catchProgress: 0,
-    ripPosition: null,
-  };
-}
-
-function createGameState(roomCode: string, hostId: string): GameState {
-  return {
-    roomCode,
-    phase: GamePhase.LOBBY,
-    players: [],
-    hostId,
-    seekerId: null,
-    timeRemaining: MAP_CONFIG.gameDuration,
-    marcoCooldown: 0,
-    marcoRevealPlayerId: null,
-    marcoRevealExpiry: null,
-    winner: null,
-    exploredAreas: [],
-    walls: [],
-  };
-}
-
-
-function lineIntersectsRect(p1: { x: number, y: number }, p2: { x: number, y: number }, rect: { x: number, y: number, w: number, h: number }): boolean {
-  // Check minimal enclosing box first
-  const minX = Math.min(p1.x, p2.x);
-  const maxX = Math.max(p1.x, p2.x);
-  const minY = Math.min(p1.y, p2.y);
-  const maxY = Math.max(p1.y, p2.y);
-
-  if (maxX < rect.x - rect.w / 2 || minX > rect.x + rect.w / 2 || maxY < rect.y - rect.h / 2 || minY > rect.y + rect.h / 2) {
-    return false;
-  }
-
-  // Check intersection with each edge of the rectangle
-  const rx = rect.x - rect.w / 2;
-  const ry = rect.y - rect.h / 2;
-  const rw = rect.w;
-  const rh = rect.h;
-
-  const left = { p1: { x: rx, y: ry }, p2: { x: rx, y: ry + rh } };
-  const right = { p1: { x: rx + rw, y: ry }, p2: { x: rx + rw, y: ry + rh } };
-  const top = { p1: { x: rx, y: ry }, p2: { x: rx + rw, y: ry } };
-  const bottom = { p1: { x: rx, y: ry + rh }, p2: { x: rx + rw, y: ry + rh } };
-
-  return lineIntersectsLine(p1, p2, left.p1, left.p2) ||
-    lineIntersectsLine(p1, p2, right.p1, right.p2) ||
-    lineIntersectsLine(p1, p2, top.p1, top.p2) ||
-    lineIntersectsLine(p1, p2, bottom.p1, bottom.p2);
-}
-
-function lineIntersectsLine(a1: { x: number, y: number }, a2: { x: number, y: number }, b1: { x: number, y: number }, b2: { x: number, y: number }): boolean {
-  const det = (a2.x - a1.x) * (b2.y - b1.y) - (b2.x - b1.x) * (a2.y - a1.y);
-  if (det === 0) return false;
-
-  const lambda = ((b2.y - b1.y) * (b2.x - a1.x) + (b1.x - b2.x) * (b2.y - a1.y)) / det;
-  const gamma = ((a1.y - a2.y) * (b2.x - a1.x) + (a2.x - a1.x) * (b2.y - a1.y)) / det;
-
-  return (0 <= lambda && lambda <= 1) && (0 <= gamma && gamma <= 1);
-}
-
-
-interface Point {
-  x: number;
-  y: number;
-}
-
-function getLineIntersection(p1: Point, p2: Point, p3: Point, p4: Point): Point | null {
-  const x1 = p1.x, y1 = p1.y, x2 = p2.x, y2 = p2.y;
-  const x3 = p3.x, y3 = p3.y, x4 = p4.x, y4 = p4.y;
-
-  const denom = (y4 - y3) * (x2 - x1) - (x4 - x3) * (y2 - y1);
-  if (denom === 0) return null;
-
-  const ua = ((x4 - x3) * (y1 - y3) - (y4 - y3) * (x1 - x3)) / denom;
-  const ub = ((x2 - x1) * (y1 - y3) - (y2 - y1) * (x1 - x3)) / denom;
-
-  if (ua >= 0 && ua <= 1 && ub >= 0 && ub <= 1) {
-    return {
-      x: x1 + ua * (x2 - x1),
-      y: y1 + ua * (y2 - y1)
-    };
-  }
-  return null;
-}
-
-function getRayRectIntersection(p1: Point, p2: Point, rect: { x: number, y: number, w: number, h: number }): Point | null {
-  // Rect boundaries
-  const left = rect.x - rect.w / 2;
-  const right = rect.x + rect.w / 2;
-  const top = rect.y - rect.h / 2;
-  const bottom = rect.y + rect.h / 2;
-
-  // Check bounding box first
-  const minX = Math.min(p1.x, p2.x);
-  const maxX = Math.max(p1.x, p2.x);
-  const minY = Math.min(p1.y, p2.y);
-  const maxY = Math.max(p1.y, p2.y);
-
-  if (maxX < left || minX > right || maxY < top || minY > bottom) return null;
-
-  let closest: Point | null = null;
-  let minDist = Infinity;
-
-  // Edges: Left, Right, Top, Bottom
-  const edges = [
-    { a: { x: left, y: top }, b: { x: left, y: bottom } },
-    { a: { x: right, y: top }, b: { x: right, y: bottom } },
-    { a: { x: left, y: top }, b: { x: right, y: top } },
-    { a: { x: left, y: bottom }, b: { x: right, y: bottom } }
-  ];
-
-  for (const edge of edges) {
-    const pt = getLineIntersection(p1, p2, edge.a, edge.b);
-    if (pt) {
-      const dx = pt.x - p1.x;
-      const dy = pt.y - p1.y;
-      const d = dx * dx + dy * dy;
-      if (d < minDist) {
-        minDist = d;
-        closest = pt;
-      }
-    }
-  }
-
-  return closest;
-}
-
-function isPointVisible(
-  origin: Point,
-  target: Point,
-  walls: { x: number, y: number, w: number, h: number }[]
-): boolean {
-  // Check if line segment intersects any wall
-  for (const wall of walls) {
-    // Simple bounding box check first
-    const minX = Math.min(origin.x, target.x);
-    const maxX = Math.max(origin.x, target.x);
-    const minY = Math.min(origin.y, target.y);
-    const maxY = Math.max(origin.y, target.y);
-
-    const left = wall.x - wall.w / 2;
-    const right = wall.x + wall.w / 2;
-    const top = wall.y - wall.h / 2;
-    const bottom = wall.y + wall.h / 2;
-
-    if (maxX < left || minX > right || maxY < top || minY > bottom) continue;
-
-    // Detailed intersection check
-    const intersection = getRayRectIntersection(origin, target, wall);
-    if (intersection) {
-      // Check if intersection is strictly between origin and target (excluding endpoints usually, but here obstacles are solid)
-      // getRayRectIntersection returns closest point on ray. We need to check if it's closer than target.
-      const distToTargetSq = (target.x - origin.x) ** 2 + (target.y - origin.y) ** 2;
-      const distToHitSq = (intersection.x - origin.x) ** 2 + (intersection.y - origin.y) ** 2;
-
-      // If hit is closer than target (with small epsilon), then blocked
-      if (distToHitSq < distToTargetSq - 0.1) {
-        return false;
-      }
-    }
-  }
-  return true;
-}
-
-function isInVisionCone(
-  seeker: Player,
-  target: Player,
-  visionAngle: number,
-  visionDistance: number,
-  walls: { x: number, y: number, w: number, h: number }[]
-): boolean {
-  const dx = target.x - seeker.x;
-  const dy = target.y - seeker.y;
-  const distance = Math.sqrt(dx * dx + dy * dy);
-
-  if (distance > visionDistance) return false;
-
-  const angleToTarget = Math.atan2(dy, dx) * (180 / Math.PI);
-  let angleDiff = Math.abs(seeker.angle - angleToTarget);
-  // Normalize angle difference
-  while (angleDiff > 180) angleDiff -= 360;
-  while (angleDiff < -180) angleDiff += 360;
-  angleDiff = Math.abs(angleDiff);
-
-  if (angleDiff > visionAngle / 2) return false;
-
-  // Check Line of Sight against walls using detailed check
-  return isPointVisible(
-    { x: seeker.x, y: seeker.y },
-    { x: target.x, y: target.y },
-    walls
-  );
-}
-
-export async function registerRoutes(
-  httpServer: Server,
-  app: Express
-): Promise<Server> {
-  const io = new SocketIOServer<ClientToServerEvents, ServerToClientEvents, {}, SocketData>(httpServer, {
-    cors: {
-      origin: "*",
-      methods: ["GET", "POST"],
-    },
+export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
+  // LAN addresses, so a TV opened on localhost can still show phones a reachable join link.
+  app.get("/api/lan", (_req, res) => {
+    const ips = Object.values(networkInterfaces())
+      .flat()
+      .filter((n) => n && n.family === "IPv4" && !n.internal)
+      .map((n) => n!.address);
+    res.json({ ips, port: Number(process.env.PORT || 5000) });
   });
 
-  io.on("connection", (socket) => {
-    log(`Socket connected: ${socket.id}`, "socket.io");
-    socket.data.roomCode = null;
-    socket.data.playerId = null;
-    socket.data.clientType = null;
+  const io: IO = new SocketIOServer(httpServer, { cors: { origin: "*" } });
+  const rooms = new Map<string, Room>();
+  // Which socket currently owns a seat / the TV, so a stale socket's disconnect is ignored.
+  const seatSockets = new Map<string, string>();
+  const hostSockets = new Map<string, string>();
 
-    socket.on("createRoom", (clientType, callback) => {
-      const roomCode = generateRoomCode();
-      const hostId = clientType === "tv" ? socket.id : generatePlayerId();
-      const gameState = createGameState(roomCode, hostId);
-      rooms.set(roomCode, gameState);
+  function newCode(): string {
+    for (;;) {
+      let code = "";
+      for (let i = 0; i < 4; i++) code += CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)];
+      if (!rooms.has(code)) return code;
+    }
+  }
 
-      socket.data.roomCode = roomCode;
-      socket.data.clientType = clientType;
-      socket.join(roomCode);
+  function createRoom(): Room {
+    const code = newCode();
+    const room = new Room(code, {
+      room: (info) => io.to(code).emit("room", info),
+      snap: (snap) => io.to(code).volatile.emit("snap", snap),
+      fx: (events) => io.to(code).emit("fx", events),
+    });
+    rooms.set(code, room);
+    log(`room ${code} created`, "game");
+    return room;
+  }
 
-      if (clientType === "tv") {
-        socket.data.playerId = null;
-      }
+  function detach(socket: GameSocket) {
+    const { code, playerId, isHost } = socket.data;
+    if (!code) return;
+    const room = rooms.get(code);
+    if (room && playerId && seatSockets.get(playerId) === socket.id) {
+      seatSockets.delete(playerId);
+      room.setConnected(playerId, false);
+    }
+    if (room && isHost && hostSockets.get(code) === socket.id) {
+      hostSockets.delete(code);
+      room.hostConnected = false;
+    }
+    socket.leave(code);
+    socket.data = { code: null, playerId: null, isHost: false };
+  }
 
-      log(`Room created: ${roomCode} by ${clientType}`, "socket.io");
-      callback(roomCode);
-      io.to(roomCode).emit("gameState", gameState);
+  function canControl(socket: GameSocket, room: Room) {
+    return socket.data.isHost || (socket.data.playerId !== null && socket.data.playerId === room.vipId);
+  }
+
+  io.on("connection", (socket: GameSocket) => {
+    socket.data = { code: null, playerId: null, isHost: false };
+
+    socket.on("host", (req, cb) => {
+      if (typeof cb !== "function") return;
+      detach(socket);
+      let room = req?.code ? rooms.get(String(req.code).toUpperCase()) : undefined;
+      if (room && room.hostToken !== req.hostToken) room = undefined;
+      if (!room) room = createRoom();
+
+      const previous = hostSockets.get(room.code);
+      if (previous && previous !== socket.id) io.sockets.sockets.get(previous)?.emit("notice", "TV opened elsewhere");
+      hostSockets.set(room.code, socket.id);
+      room.hostConnected = true;
+      socket.data = { code: room.code, playerId: null, isHost: true };
+      socket.join(room.code);
+      cb({ ok: true, code: room.code, hostToken: room.hostToken });
+      socket.emit("room", room.info());
     });
 
-    socket.on("joinRoom", (roomCode, playerName, clientType, callback) => {
-      const upperCode = roomCode.toUpperCase();
-      const gameState = rooms.get(upperCode);
+    socket.on("join", (req, cb) => {
+      if (typeof cb !== "function") return;
+      const code = String(req?.code ?? "").toUpperCase();
+      const room = rooms.get(code);
+      if (!room) return cb({ ok: false, error: "Room not found" });
 
-      if (!gameState) {
-        callback(false, "Room not found");
-        return;
+      let seat = req.token ? room.playerByToken(String(req.token)) : undefined;
+      if (!seat) {
+        if (req.token && !req.name) return cb({ ok: false, error: "Your seat expired. Join again." });
+        const name = String(req.name ?? "").trim().slice(0, 12);
+        if (!name) return cb({ ok: false, error: "Enter a name" });
+        const err = room.canJoin(name);
+        if (err) return cb({ ok: false, error: err });
+        seat = room.addPlayer(name);
+        log(`${name} joined ${code}`, "game");
       }
 
-      if (gameState.phase !== GamePhase.LOBBY) {
-        callback(false, "Game already in progress");
-        return;
-      }
-
-      if (gameState.players.length >= 8) {
-        callback(false, "Room is full");
-        return;
-      }
-
-      if (gameState.players.some(p => p.name.toLowerCase() === playerName.toLowerCase())) {
-        callback(false, "Name already taken");
-        return;
-      }
-
-      if (gameState.players.some(p => p.name.toLowerCase() === playerName.toLowerCase())) {
-        callback(false, "Name already taken");
-        return;
-      }
-
-      socket.data.roomCode = upperCode;
-      socket.data.clientType = clientType;
-      socket.join(upperCode);
-
-      if (clientType === "mobile") {
-        const playerId = generatePlayerId();
-        const player = createPlayer(playerId, playerName, gameState.players.length);
-        gameState.players.push(player);
-        socket.data.playerId = playerId;
-
-        log(`Player ${playerName} joined room ${upperCode}`, "socket.io");
-        io.to(upperCode).emit("playerJoined", player);
-      } else {
-        socket.data.playerId = null;
-      }
-
-      io.to(upperCode).emit("gameState", gameState);
-      callback(true);
-    });
-
-    // Ready check removed
-
-
-    socket.on("startGame", () => {
-      const { roomCode } = socket.data;
-      if (!roomCode) return;
-
-      const gameState = rooms.get(roomCode);
-      if (!gameState) return;
-
-      if (gameState.hostId !== socket.id) {
-        socket.emit("error", "Only the host can start the game");
-        return;
-      }
-
-      if (gameState.players.length < 2) {
-        socket.emit("error", "Need at least 2 players to start");
-        return;
-      }
-
-      // Ready check removed
-
-
-      const seekerIndex = Math.floor(Math.random() * gameState.players.length);
-      const seekerId = gameState.players[seekerIndex].id;
-      gameState.seekerId = seekerId;
-
-      gameState.walls = generateMaze();
-
-      gameState.players.forEach((player, index) => {
-        const spawn = getRandomSpawnPosition(gameState.walls);
-        player.x = spawn.x;
-        player.y = spawn.y;
-        player.angle = Math.random() * 360;
-        player.role = player.id === seekerId ? PlayerRole.SEEKER : PlayerRole.RUNNER;
-        player.status = PlayerStatus.ALIVE;
-        player.catchProgress = 0;
-        player.ripPosition = null;
-      });
-
-      gameState.phase = GamePhase.ROLE_REVEAL;
-      gameState.timeRemaining = MAP_CONFIG.gameDuration;
-      gameState.marcoCooldown = 0;
-      gameState.winner = null;
-      gameState.exploredAreas = [];
-
-      io.to(roomCode).emit("gameState", gameState);
-      io.to(roomCode).emit("gameStarted");
-
-      const sockets = io.sockets.adapter.rooms.get(roomCode);
-      if (sockets) {
-        for (const socketId of Array.from(sockets)) {
-          const clientSocket = io.sockets.sockets.get(socketId);
-          if (clientSocket && clientSocket.data.playerId) {
-            const player = gameState.players.find((p) => p.id === clientSocket.data.playerId);
-            if (player) {
-              clientSocket.emit("roleRevealed", player.role);
-            }
-          }
+      detach(socket);
+      const previous = seatSockets.get(seat.id);
+      if (previous && previous !== socket.id) {
+        const old = io.sockets.sockets.get(previous);
+        if (old) {
+          old.emit("notice", "You joined from another tab or device");
+          old.leave(code);
+          old.data = { code: null, playerId: null, isHost: false };
         }
       }
-
-      setTimeout(() => {
-        if (!rooms.has(roomCode)) return;
-        gameState.phase = GamePhase.PLAYING;
-        io.to(roomCode).emit("gameState", gameState);
-
-        startGameLoop(roomCode, io);
-      }, 3000);
+      seatSockets.set(seat.id, socket.id);
+      socket.data = { code, playerId: seat.id, isHost: false };
+      socket.join(code);
+      room.setConnected(seat.id, true);
+      cb({ ok: true, playerId: seat.id, token: seat.token, code });
     });
 
-    socket.on("movePlayer", (x, y, angle) => {
-      const { roomCode, playerId } = socket.data;
-      if (!roomCode || !playerId) return;
-
-      const gameState = rooms.get(roomCode);
-      if (!gameState || gameState.phase !== GamePhase.PLAYING) return;
-
-      const player = gameState.players.find((p) => p.id === playerId);
-      if (!player || player.status !== PlayerStatus.ALIVE) return;
-
-      // Collision check with walls
-      // Collision check with walls - Separation of Axis for Sliding
-      
-      // 1. Try moving X
-      let testRectX = {
-        x: x - MAP_CONFIG.playerRadius,
-        y: player.y - MAP_CONFIG.playerRadius, // Use current Y
-        w: MAP_CONFIG.playerRadius * 2,
-        h: MAP_CONFIG.playerRadius * 2
-      };
-
-      const collisionX = gameState.walls.some(wall => {
-        const wallRect = {
-          x: wall.x - wall.w / 2,
-          y: wall.y - wall.h / 2,
-          w: wall.w,
-          h: wall.h
-        };
-        return rectIntersectsRect(testRectX, wallRect);
-      });
-
-      if (!collisionX) {
-        player.x = Math.max(MAP_CONFIG.playerRadius, Math.min(MAP_CONFIG.width - MAP_CONFIG.playerRadius, x));
-      }
-
-      // 2. Try moving Y (using potentially updated X, or old X? Standard sliding usually checks independently or sequentially)
-      // If we use updated X, we might get stuck on a corner we just moved into. 
-      // Typically for simple top-down, checking Y with NEW X is correct for "sliding along a diagonal wall" but checking with OLD X is safer for "sliding along a straight wall".
-      // Let's use the player.x we just potentially updated.
-      let testRectY = {
-        x: player.x - MAP_CONFIG.playerRadius,
-        y: y - MAP_CONFIG.playerRadius,
-        w: MAP_CONFIG.playerRadius * 2,
-        h: MAP_CONFIG.playerRadius * 2
-      };
-
-      const collisionY = gameState.walls.some(wall => {
-        const wallRect = {
-          x: wall.x - wall.w / 2,
-          y: wall.y - wall.h / 2,
-          w: wall.w,
-          h: wall.h
-        };
-        return rectIntersectsRect(testRectY, wallRect);
-      });
-
-      if (!collisionY) {
-        player.y = Math.max(MAP_CONFIG.playerRadius, Math.min(MAP_CONFIG.height - MAP_CONFIG.playerRadius, y));
-      }
-
-      player.angle = angle;
-
-      // Update explored areas for ALL alive players (Runners + Seeker)
-      const visionRadius = player.role === PlayerRole.SEEKER
-        ? 60 // Smaller radius for seeker trail (don't reveal 360 around them)
-        : MAP_CONFIG.runnerVisionRadius;
-
-      gameState.exploredAreas.push({
-        x: player.x,
-        y: player.y,
-        radius: visionRadius,
-        source: player.role === PlayerRole.SEEKER ? "seeker" : "runner"
-      });
-
-      // significantly increased limit to prevent history loss
-      if (gameState.exploredAreas.length > 20000) {
-        gameState.exploredAreas = gameState.exploredAreas.slice(-15000);
-      }
-    });
-
-    socket.on("triggerMarco", () => {
-      const { roomCode, playerId } = socket.data;
-      if (!roomCode || !playerId) return;
-
-      const gameState = rooms.get(roomCode);
-      if (!gameState || gameState.phase !== GamePhase.PLAYING) return;
-
-      const player = gameState.players.find((p) => p.id === playerId);
-      if (!player || player.role !== PlayerRole.SEEKER) return;
-
-      if (gameState.marcoCooldown > 0) {
-        socket.emit("error", "Marco ability is on cooldown");
+    socket.on("leave", () => {
+      const { code, playerId } = socket.data;
+      const room = code ? rooms.get(code) : undefined;
+      if (room && playerId) {
+        seatSockets.delete(playerId);
+        room.leave(playerId);
+        socket.leave(room.code);
+        socket.data = { code: null, playerId: null, isHost: false };
         return;
       }
-
-      const aliveRunners = gameState.players.filter(
-        (p) => p.role === PlayerRole.RUNNER && p.status === PlayerStatus.ALIVE
-      );
-
-      if (aliveRunners.length === 0) return;
-
-      const targetRunner = aliveRunners[Math.floor(Math.random() * aliveRunners.length)];
-      gameState.marcoRevealPlayerId = targetRunner.id;
-      gameState.marcoRevealExpiry = Date.now() + MAP_CONFIG.marcoRevealDuration;
-      gameState.marcoCooldown = MAP_CONFIG.marcoCooldown;
-
-      log(`Marco triggered! Revealing ${targetRunner.name}`, "socket.io");
-      io.to(roomCode).emit("marcoTriggered", targetRunner.id);
-      io.to(roomCode).emit("gameState", gameState);
-
-      setTimeout(() => {
-        if (!rooms.has(roomCode)) return;
-        const gs = rooms.get(roomCode);
-        if (gs) {
-          gs.marcoRevealPlayerId = null;
-          gs.marcoRevealExpiry = null;
-          io.to(roomCode).emit("gameState", gs);
-        }
-      }, MAP_CONFIG.marcoRevealDuration);
+      detach(socket);
     });
 
-    socket.on("playAgain", () => {
-      const { roomCode } = socket.data;
-      if (!roomCode) return;
-
-      const gameState = rooms.get(roomCode);
-      if (!gameState) return;
-
-      // Reset game state to LOBBY
-      gameState.phase = GamePhase.LOBBY;
-      gameState.winner = null;
-      gameState.seekerId = null;
-      gameState.timeRemaining = MAP_CONFIG.gameDuration;
-      gameState.marcoCooldown = 0;
-      gameState.marcoRevealPlayerId = null;
-      gameState.exploredAreas = [];
-
-      // Reset players
-      gameState.players.forEach(p => {
-        p.role = PlayerRole.NONE;
-        p.status = PlayerStatus.WAITING;
-        p.catchProgress = 0;
-        p.ripPosition = null;
-        p.angle = 0;
-        // Reset position to a random spawn ? Or keep them where they were?
-        // Better to respawn them when game starts, so just leave x/y for now or reset providing visual feedback?
-        // Let's leave x/y as is, they will be teleported on game start.
-      });
-
-      log(`Game reset in room ${roomCode}`, "socket.io");
-      io.to(roomCode).emit("gameState", gameState);
+    socket.on("start", () => {
+      const room = socket.data.code ? rooms.get(socket.data.code) : undefined;
+      if (!room) return;
+      if (!canControl(socket, room)) return void socket.emit("notice", "Only the host can start");
+      const err = room.start();
+      if (err) socket.emit("notice", err);
     });
 
-    socket.on("leaveRoom", () => {
-      handlePlayerLeave(socket, io);
+    socket.on("toLobby", () => {
+      const room = socket.data.code ? rooms.get(socket.data.code) : undefined;
+      if (room && canControl(socket, room)) room.toLobby();
     });
 
-    socket.on("disconnect", () => {
-      log(`Socket disconnected: ${socket.id}`, "socket.io");
-      handlePlayerLeave(socket, io);
+    socket.on("input", (inputs) => {
+      const { code, playerId } = socket.data;
+      if (!code || !playerId) return;
+      rooms.get(code)?.queueInputs(playerId, inputs);
     });
+
+    socket.on("disconnect", () => detach(socket));
   });
 
-  function handlePlayerLeave(
-    socket: any,
-    io: SocketIOServer<ClientToServerEvents, ServerToClientEvents, {}, SocketData>
-  ) {
-    const { roomCode, playerId, clientType } = socket.data;
-    if (!roomCode) return;
-
-    const gameState = rooms.get(roomCode);
-    if (!gameState) return;
-
-    if (clientType === "mobile" && playerId) {
-      gameState.players = gameState.players.filter((p) => p.id !== playerId);
-      io.to(roomCode).emit("playerLeft", playerId);
-      io.to(roomCode).emit("gameState", gameState);
-      log(`Player ${playerId} left room ${roomCode}`, "socket.io");
+  // One fixed-rate loop drives every room.
+  let last = performance.now();
+  setInterval(() => {
+    const now = performance.now();
+    const dt = Math.min(100, now - last);
+    last = now;
+    for (const [code, room] of Array.from(rooms)) {
+      room.tick(dt);
+      if (room.idleMs > RULES.roomIdleMs) {
+        rooms.delete(code);
+        log(`room ${code} closed (idle)`, "game");
+      }
     }
-
-    if (clientType === "tv" || gameState.players.length === 0) {
-      const interval = gameIntervals.get(roomCode);
-      if (interval) {
-        clearInterval(interval);
-        gameIntervals.delete(roomCode);
-      }
-      rooms.delete(roomCode);
-      log(`Room ${roomCode} closed`, "socket.io");
-    }
-
-    socket.leave(roomCode);
-    socket.data.roomCode = null;
-    socket.data.playerId = null;
-    socket.data.clientType = null;
-  }
-
-  function startGameLoop(
-    roomCode: string,
-    io: SocketIOServer<ClientToServerEvents, ServerToClientEvents, {}, SocketData>
-  ) {
-    const tickRate = 30; // Faster updates (approx 33ms)
-    let lastTick = Date.now();
-
-    const interval = setInterval(() => {
-      const gameState = rooms.get(roomCode);
-      if (!gameState || gameState.phase !== GamePhase.PLAYING) {
-        clearInterval(interval);
-        gameIntervals.delete(roomCode);
-        return;
-      }
-
-      const now = Date.now();
-      const delta = now - lastTick;
-      lastTick = now;
-
-      gameState.timeRemaining = Math.max(0, gameState.timeRemaining - delta);
-      gameState.marcoCooldown = Math.max(0, gameState.marcoCooldown - delta);
-
-      const seeker = gameState.players.find((p) => p.role === PlayerRole.SEEKER);
-      if (seeker && seeker.status === PlayerStatus.ALIVE) {
-        gameState.players.forEach((runner) => {
-          if (runner.role !== PlayerRole.RUNNER || runner.status !== PlayerStatus.ALIVE) return;
-
-          const inVision = isInVisionCone(
-            seeker,
-            runner,
-            MAP_CONFIG.seekerVisionAngle,
-            MAP_CONFIG.seekerVisionDistance,
-            gameState.walls
-          );
-
-          if (inVision) {
-            runner.catchProgress += (delta / MAP_CONFIG.catchDuration) * 100;
-            if (runner.catchProgress >= 100) {
-              runner.status = PlayerStatus.CAUGHT;
-              runner.ripPosition = { x: runner.x, y: runner.y };
-              runner.catchProgress = 100;
-              io.to(roomCode).emit("playerCaught", runner.id, { x: runner.x, y: runner.y });
-              log(`Player ${runner.name} was caught!`, "socket.io");
-            }
-          } else {
-            runner.catchProgress = Math.max(0, runner.catchProgress - (delta / 500) * 100);
-          }
-        });
-      }
-
-      const aliveRunners = gameState.players.filter(
-        (p) => p.role === PlayerRole.RUNNER && p.status === PlayerStatus.ALIVE
-      );
-
-      if (aliveRunners.length === 0) {
-        endGame(roomCode, "seeker", io);
-        return;
-      }
-
-      if (gameState.timeRemaining <= 0) {
-        endGame(roomCode, "runners", io);
-        return;
-      }
-
-      io.to(roomCode).emit("gameState", gameState);
-    }, tickRate);
-
-    gameIntervals.set(roomCode, interval);
-  }
-
-  function endGame(
-    roomCode: string,
-    winner: "seeker" | "runners",
-    io: SocketIOServer<ClientToServerEvents, ServerToClientEvents, {}, SocketData>
-  ) {
-    const gameState = rooms.get(roomCode);
-    if (!gameState) return;
-
-    gameState.phase = GamePhase.GAME_OVER;
-    gameState.winner = winner;
-    // Clear explored areas on game over so they are reset for the next game
-    gameState.exploredAreas = [];
-
-    const interval = gameIntervals.get(roomCode);
-    if (interval) {
-      clearInterval(interval);
-      gameIntervals.delete(roomCode);
-    }
-
-    log(`Game over in room ${roomCode}. Winner: ${winner}`, "socket.io");
-    io.to(roomCode).emit("gameOver", winner);
-    io.to(roomCode).emit("gameState", gameState);
-  }
+  }, 1000 / TICK_RATE);
 
   return httpServer;
 }

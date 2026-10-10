@@ -2,196 +2,91 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Flashlight, Users, Tv, Smartphone } from "lucide-react";
+import { Tv, Smartphone } from "lucide-react";
 import { Logo } from "@/components/ui/Logo";
-import { useGameStore } from "@/lib/gameStore";
-import { socket, connectSocket } from "@/lib/socket";
-import { ClientType } from "@shared/schema";
+import { hostGame, joinGame, rememberedName } from "@/lib/net";
+import { unlockAudio } from "@/lib/sfx";
 
-interface WelcomeScreenProps {
-  onRoomCreated: (roomCode: string) => void;
-  onRoomJoined: () => void;
-}
+export function WelcomeScreen() {
+  const urlRoom = new URLSearchParams(window.location.search).get("room")?.toUpperCase().slice(0, 4) ?? "";
+  const [mode, setMode] = useState<"select" | "join">(urlRoom ? "join" : "select");
+  const [roomCode, setRoomCode] = useState(urlRoom);
+  const [playerName, setPlayerName] = useState(rememberedName());
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
-export function WelcomeScreen({ onRoomCreated, onRoomJoined }: WelcomeScreenProps) {
-  const [mode, setMode] = useState<"select" | "create" | "join">("select");
-  const [roomCode, setRoomCode] = useState("");
-  const [playerName, setPlayerName] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
-  const { setClientType, setRoomCode: storeSetRoomCode, setPlayerName: storeSetPlayerName, setPlayerId, setError, error } = useGameStore();
-
-  const handleCreateGame = () => {
-    setIsLoading(true);
-    setError(null);
-    connectSocket();
-
-    socket.emit("createRoom", ClientType.TV, (code) => {
-      setClientType(ClientType.TV);
-      storeSetRoomCode(code);
-      setIsLoading(false);
-      onRoomCreated(code);
-    });
+  const host = async () => {
+    unlockAudio();
+    setBusy(true);
+    setError(await hostGame());
+    setBusy(false);
   };
 
-  const handleJoinGame = () => {
-    if (!roomCode || roomCode.length !== 4) {
-      setError("Please enter a 4-digit room code");
-      return;
-    }
-    if (!playerName.trim()) {
-      setError("Please enter your name");
-      return;
-    }
-
-    setIsLoading(true);
+  const join = async () => {
+    unlockAudio();
+    setBusy(true);
     setError(null);
-    connectSocket();
-
-    socket.emit("joinRoom", roomCode.toUpperCase(), playerName.trim(), ClientType.MOBILE, (success, errorMsg) => {
-      setIsLoading(false);
-      if (success) {
-        setClientType(ClientType.MOBILE);
-        storeSetRoomCode(roomCode.toUpperCase());
-        storeSetPlayerName(playerName.trim());
-        onRoomJoined();
-      } else {
-        setError(errorMsg || "Failed to join room");
-      }
-    });
+    const err = await joinGame(roomCode.toUpperCase(), playerName.trim());
+    setBusy(false);
+    if (err) setError(err);
+    else window.history.replaceState(null, "", window.location.pathname);
   };
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-background">
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-primary/5 rounded-full blur-3xl" />
-        <div className="absolute bottom-1/4 right-1/4 w-64 h-64 bg-game-seeker/5 rounded-full blur-3xl" />
+    <div className="h-full overflow-y-auto flex flex-col items-center justify-center p-4 bg-background">
+      <div className="relative z-10 text-center mb-6">
+        <Logo />
+        <p className="text-muted-foreground text-lg font-game mt-2">Hide in the dark. Grab the orbs. Don't get lit.</p>
       </div>
 
       {mode === "select" && (
-        <div className="relative z-10 text-center mb-8 animate-fade-in group hover:scale-105 transition-transform duration-500">
-          <Logo />
-          <p className="text-muted-foreground text-lg font-game mt-6">
-            Hunt or be hunted in the shadows
-          </p>
-        </div>
-      )}
-
-      {mode === "select" && (
-        <div className="flex flex-col md:flex-row gap-4 w-full max-w-2xl animate-scale-in">
-          <Card
-            className="flex-1 hover-elevate cursor-pointer transition-all"
-            onClick={handleCreateGame}
-            data-testid="card-create-game"
-          >
+        <div className="flex flex-col md:flex-row gap-4 w-full max-w-2xl">
+          <Card className="flex-1 hover-elevate cursor-pointer" onClick={host} data-testid="card-create-game">
             <CardHeader className="text-center pb-2">
               <div className="mx-auto w-16 h-16 rounded-full bg-primary/20 flex items-center justify-center mb-2">
                 <Tv className="w-8 h-8 text-primary" />
               </div>
-              <CardTitle className="font-display text-xl tracking-wide">CREATE GAME</CardTitle>
+              <CardTitle className="font-display text-xl tracking-wide">HOST ON THIS SCREEN</CardTitle>
             </CardHeader>
-            <CardContent className="text-center">
-              <p className="text-muted-foreground text-sm">
-                Host a game on TV for others to join
-              </p>
+            <CardContent className="text-center text-muted-foreground text-sm">
+              Open this on the TV or laptop everyone can see.
             </CardContent>
           </Card>
-
-          <Card
-            className="flex-1 hover-elevate cursor-pointer transition-all"
-            onClick={() => setMode("join")}
-            data-testid="card-join-game"
-          >
+          <Card className="flex-1 hover-elevate cursor-pointer" onClick={() => setMode("join")} data-testid="card-join-game">
             <CardHeader className="text-center pb-2">
               <div className="mx-auto w-16 h-16 rounded-full bg-game-runner/20 flex items-center justify-center mb-2">
                 <Smartphone className="w-8 h-8 text-game-runner" />
               </div>
-              <CardTitle className="font-display text-xl tracking-wide">JOIN GAME</CardTitle>
+              <CardTitle className="font-display text-xl tracking-wide">JOIN WITH PHONE</CardTitle>
             </CardHeader>
-            <CardContent className="text-center">
-              <p className="text-muted-foreground text-sm">
-                Join from your mobile device
-              </p>
-            </CardContent>
+            <CardContent className="text-center text-muted-foreground text-sm">Your phone is your controller.</CardContent>
           </Card>
         </div>
       )}
 
-      {mode === "create" && (
-        <Card className="w-full max-w-md animate-slide-in">
-          <CardHeader className="text-center">
-            <div className="mx-auto w-16 h-16 rounded-full bg-primary/20 flex items-center justify-center mb-2">
-              <Tv className="w-8 h-8 text-primary" />
-            </div>
-            <CardTitle className="font-display text-2xl tracking-wide">CREATE LOBBY</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <p className="text-center text-muted-foreground">
-              This screen will become the main game display. Others will join using their phones.
-            </p>
-            <div className="flex gap-2">
-              <Button
-                variant="outline"
-                onClick={() => setMode("select")}
-                className="flex-1"
-                data-testid="button-back"
-              >
-                Back
-              </Button>
-              <Button
-                onClick={handleCreateGame}
-                disabled={isLoading}
-                className="flex-1"
-                data-testid="button-create-lobby"
-              >
-                {isLoading ? (
-                  <span className="flex items-center gap-2">
-                    <span className="w-4 h-4 border-2 border-primary-foreground/30 border-t-primary-foreground rounded-full animate-spin" />
-                    Creating...
-                  </span>
-                ) : (
-                  <>
-                    <Users className="w-4 h-4 mr-2" />
-                    Create Lobby
-                  </>
-                )}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
       {mode === "join" && (
-        <Card className="w-full max-w-md animate-slide-in">
-          <CardHeader className="text-center">
-            <div className="mx-auto w-16 h-16 rounded-full bg-game-runner/20 flex items-center justify-center mb-2">
-              <Smartphone className="w-8 h-8 text-game-runner" />
-            </div>
-            <CardTitle className="font-display text-2xl tracking-wide">JOIN GAME</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
+        <Card className="w-full max-w-md">
+          <CardContent className="space-y-4 pt-6">
             <div>
-              <label className="text-sm font-medium text-muted-foreground mb-2 block">
-                Room Code
-              </label>
+              <label className="text-sm font-medium text-muted-foreground mb-2 block">Room code</label>
               <Input
                 value={roomCode}
-                onChange={(e) => setRoomCode(e.target.value.toUpperCase().slice(0, 4))}
-                placeholder="XXXX"
+                onChange={(e) => setRoomCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4))}
+                placeholder="ABCD"
                 className="text-center text-3xl font-mono tracking-[0.5em] h-16"
-                maxLength={4}
+                autoCapitalize="characters"
+                autoComplete="off"
                 data-testid="input-room-code"
               />
             </div>
             <div>
-              <label className="text-sm font-medium text-muted-foreground mb-2 block">
-                Your Name
-              </label>
+              <label className="text-sm font-medium text-muted-foreground mb-2 block">Your name</label>
               <Input
                 value={playerName}
                 onChange={(e) => setPlayerName(e.target.value.slice(0, 12))}
-                placeholder="Enter your name"
-                className="text-center text-lg"
-                maxLength={12}
+                onKeyDown={(e) => e.key === "Enter" && roomCode.length === 4 && playerName.trim() && join()}
+                placeholder="Name"
+                className="text-center text-lg h-12"
                 data-testid="input-player-name"
               />
             </div>
@@ -201,36 +96,22 @@ export function WelcomeScreen({ onRoomCreated, onRoomJoined }: WelcomeScreenProp
               </p>
             )}
             <div className="flex gap-2">
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setMode("select");
-                  setError(null);
-                }}
-                className="flex-1"
-                data-testid="button-back"
-              >
+              <Button variant="outline" onClick={() => setMode("select")} className="flex-1" data-testid="button-back">
                 Back
               </Button>
               <Button
-                onClick={handleJoinGame}
-                disabled={isLoading || roomCode.length !== 4 || !playerName.trim()}
+                onClick={join}
+                disabled={busy || roomCode.length !== 4 || !playerName.trim()}
                 className="flex-1"
                 data-testid="button-join"
               >
-                {isLoading ? (
-                  <span className="flex items-center gap-2">
-                    <span className="w-4 h-4 border-2 border-primary-foreground/30 border-t-primary-foreground rounded-full animate-spin" />
-                    Joining...
-                  </span>
-                ) : (
-                  "Join Game"
-                )}
+                {busy ? "Joining…" : "Join"}
               </Button>
             </div>
           </CardContent>
         </Card>
       )}
+      {mode === "select" && error && <p className="text-destructive mt-4">{error}</p>}
     </div>
   );
 }

@@ -1,145 +1,102 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import QRCode from "qrcode";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Copy, Users, Play, CheckCircle, Circle, Smartphone } from "lucide-react";
+import { Play, Users, Trophy } from "lucide-react";
 import { useGameStore } from "@/lib/gameStore";
-import { socket } from "@/lib/socket";
-import { useToast } from "@/hooks/use-toast";
+import { startRound } from "@/lib/net";
+import { RULES } from "@shared/config";
+import { Avatar, HowToPlay, joinBase } from "./common";
 
-interface TVLobbyProps {
-  roomCode: string;
-}
+export function TVLobby() {
+  const room = useGameStore((s) => s.room)!;
+  const [qr, setQr] = useState<string>("");
+  const [base, setBase] = useState(window.location.origin);
 
-export function TVLobby({ roomCode }: TVLobbyProps) {
-  const { gameState, isHost } = useGameStore();
-  const { toast } = useToast();
+  useEffect(() => {
+    joinBase().then(setBase);
+  }, []);
 
-  const copyRoomCode = () => {
-    navigator.clipboard.writeText(roomCode);
-    toast({
-      title: "Copied!",
-      description: "Room code copied to clipboard",
-      duration: 2000,
-    });
-  };
+  useEffect(() => {
+    QRCode.toDataURL(`${base}/?room=${room.code}`, { margin: 1, width: 220 })
+      .then(setQr)
+      .catch(() => setQr(""));
+  }, [base, room.code]);
 
-  const handleStartGame = () => {
-    socket.emit("startGame");
-  };
-
-  const players = gameState?.players || [];
-  const canStart = players.length >= 2;
+  const players = room.players;
+  const connected = players.filter((p) => p.connected).length;
+  const canStart = connected >= RULES.minPlayers;
+  const hasScores = players.some((p) => p.score > 0);
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center p-8 bg-background">
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-1/3 left-1/4 w-[500px] h-[500px] bg-primary/5 rounded-full blur-3xl" />
-        <div className="absolute bottom-1/3 right-1/4 w-[400px] h-[400px] bg-game-runner/5 rounded-full blur-3xl" />
-      </div>
-
-      <div className="relative z-10 w-full max-w-4xl space-y-8 animate-fade-in">
-        <div className="text-center">
-          <h1 className="font-display text-4xl md:text-6xl font-bold tracking-wider text-foreground mb-2">
-            LOBBY
-          </h1>
-          <p className="text-muted-foreground text-lg">
-            Waiting for players to join...
-          </p>
-        </div>
-
-        <Card className="mx-auto max-w-md">
-          <CardContent className="pt-6">
-            <div className="text-center">
-              <p className="text-sm text-muted-foreground mb-2 uppercase tracking-wide">
-                Room Code
-              </p>
-              <div className="flex items-center justify-center gap-3">
-                <span
-                  className="font-mono text-6xl font-bold tracking-[0.3em] text-primary"
-                  data-testid="text-room-code"
-                >
-                  {roomCode}
-                </span>
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  onClick={copyRoomCode}
-                  data-testid="button-copy-code"
-                >
-                  <Copy className="w-5 h-5" />
-                </Button>
-              </div>
-              <div className="flex items-center justify-center gap-2 mt-4 text-muted-foreground">
-                <Smartphone className="w-4 h-4" />
-                <span className="text-sm">Join on your phone at this URL</span>
-              </div>
+    <div className="h-full overflow-y-auto bg-background p-6 md:p-10">
+      <div className="max-w-6xl mx-auto space-y-8">
+        <div className="flex flex-col lg:flex-row gap-8 items-center lg:items-stretch">
+          <div className="flex-1 flex flex-col items-center justify-center text-center gap-2">
+            <p className="text-muted-foreground uppercase tracking-[0.3em]">Room code</p>
+            <p className="font-mono text-8xl font-bold tracking-[0.2em] text-primary" data-testid="text-room-code">
+              {room.code}
+            </p>
+            <p className="text-muted-foreground text-lg">
+              Scan the code or open <span className="text-foreground font-mono">{base.replace(/^https?:\/\//, "")}</span> on your
+              phone
+            </p>
+          </div>
+          {qr && (
+            <div className="bg-white p-3 rounded-xl shrink-0 self-center">
+              <img src={qr} alt="Join QR code" className="w-52 h-52" />
             </div>
-          </CardContent>
-        </Card>
+          )}
+        </div>
 
-        <div className="space-y-4">
-          <div className="flex items-center justify-center gap-2">
+        <div>
+          <div className="flex items-center justify-center gap-2 mb-4 text-lg">
             <Users className="w-5 h-5 text-muted-foreground" />
-            <span className="text-lg font-medium">
-              Players ({players.length}/6)
-            </span>
+            Players ({players.length}/{RULES.maxPlayers})
           </div>
-
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-4 max-w-2xl mx-auto">
-            {players.map((player, index) => (
-              <Card
-                key={player.id}
-                className="animate-slide-in"
-                style={{ animationDelay: `${index * 0.1}s` }}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {players.map((p) => (
+              <div
+                key={p.id}
+                className="flex items-center gap-3 p-3 rounded-lg bg-card border border-card-border animate-slide-in"
               >
-                <CardContent className="flex items-center gap-3 p-4">
-                  <div
-                    className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-lg"
-                    style={{ backgroundColor: player.color }}
-                  >
-                    {player.name.charAt(0).toUpperCase()}
+                <Avatar player={p} />
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold truncate text-lg" data-testid={`text-player-name-${p.id}`}>
+                    {p.name}
+                  </p>
+                  <p className="text-xs text-muted-foreground">{p.connected ? "ready" : "reconnecting…"}</p>
+                </div>
+                {hasScores && (
+                  <div className="flex items-center gap-1 text-yellow-300 font-display">
+                    <Trophy className="w-4 h-4" />
+                    {p.score}
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-medium truncate" data-testid={`text-player-name-${player.id}`}>
-                      {player.name}
-                    </p>
-                  </div>
-                </CardContent>
-              </Card>
+                )}
+              </div>
             ))}
-
-            {players.length < 6 && Array.from({ length: Math.min(3, 6 - players.length) }).map((_, i) => (
-              <Card key={`empty-${i}`} className="border-dashed opacity-50">
-                <CardContent className="flex items-center justify-center gap-2 p-4 h-[72px]">
-                  <Users className="w-5 h-5 text-muted-foreground" />
-                  <span className="text-sm text-muted-foreground">Waiting...</span>
-                </CardContent>
-              </Card>
-            ))}
+            {players.length === 0 && (
+              <p className="col-span-full text-center text-muted-foreground py-6 animate-pulse">
+                Waiting for players to join…
+              </p>
+            )}
           </div>
         </div>
 
-        {players.length < 2 && (
-          <div className="text-center">
-            <Badge variant="secondary" className="text-sm">
-              Need at least 2 players to start
-            </Badge>
-          </div>
-        )}
-
-        <div className="flex justify-center">
+        <div className="flex flex-col items-center gap-2">
           <Button
             size="lg"
-            onClick={handleStartGame}
+            onClick={startRound}
             disabled={!canStart}
-            className="px-12 py-6 text-xl font-display tracking-wider"
+            className="px-14 py-7 text-2xl font-display tracking-wider"
             data-testid="button-start-game"
           >
-            <Play className="w-6 h-6 mr-2" />
-            START GAME
+            <Play className="w-7 h-7 mr-2" />
+            START
           </Button>
+          {!canStart && <p className="text-muted-foreground text-sm">Need at least {RULES.minPlayers} players (3+ is more fun)</p>}
         </div>
+
+        <HowToPlay />
       </div>
     </div>
   );

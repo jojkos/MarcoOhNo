@@ -189,6 +189,7 @@
     margin: 0;
     padding: 0;
     overflow: hidden; /* Prevent scrollbars on game view */
+    overscroll-behavior: none; /* no pull-to-refresh mid-game */
   }
 
   body {

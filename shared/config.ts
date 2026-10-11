@@ -1,80 +1,108 @@
-// All gameplay tuning lives here. Server and client both import it, so a change
-// applies to simulation, prediction and rendering at once.
+// All gameplay tuning lives here. The server, the bots and every client import it,
+// so a change applies to simulation, validation and rendering at once.
 
-export const TICK_RATE = 30;
-export const TICK_DT = 1 / TICK_RATE; // seconds per simulation step
+export const TICK_RATE = 30; // server simulation steps per second
+export const PATCH_MS = 33; // state sync interval
+export const MOVE_SEND_HZ = 30; // how often phones report their position
 
 export const MAZE = {
-  cellSize: 120,
-  wallThickness: 24,
-  // Fraction of dead ends opened up into loops (rest stay as hiding spots).
-  braidChance: 0.6,
-  // Open 2x2 "plazas" carved into the maze for variety.
+  cell: 120,
+  wall: 24,
+  /** Fraction of dead ends opened into loops (the rest stay as hiding spots). */
+  braidChance: 0.55,
   plazas: 2,
 };
 
-/** Maze dimensions (in cells) by player count. Bigger groups get a bigger maze. */
-export function mazeSizeFor(playerCount: number): { cols: number; rows: number } {
-  if (playerCount <= 3) return { cols: 9, rows: 6 };
-  if (playerCount <= 5) return { cols: 11, rows: 7 };
+export function mazeSizeFor(players: number): { cols: number; rows: number } {
+  if (players <= 3) return { cols: 9, rows: 6 };
+  if (players <= 5) return { cols: 11, rows: 7 };
   return { cols: 13, rows: 8 };
 }
 
 export const PLAYER = {
-  radius: 15,
-  /** Half-size of the square collision box. Slightly smaller than radius so corners feel forgiving. */
-  hitHalf: 12,
-  runnerSpeed: 200, // px/s
-  seekerSpeed: 185, // slower than runners; Sprint closes the gap
-  ghostSpeed: 240,
-  seekerTurnRate: Math.PI * 4, // rad/s; flashlight sweeps instead of snapping
+  radius: 14, // collision circle
+  drawRadius: 16,
+  runnerSpeed: 210, // px/s
+  seekerSpeed: 195, // a bit slower than runners; Sprint closes the gap
+  ghostSpeed: 250,
+  /** Exponential approach rates (1/s): higher = snappier. */
+  accel: 16,
+  decel: 20,
+  seekerTurnRate: Math.PI * 4.5, // rad/s – the flashlight sweeps instead of snapping
 };
 
 export const VISION = {
-  seekerConeAngle: (70 * Math.PI) / 180,
-  seekerConeRange: 250,
-  seekerAuraRadius: 55, // small 360° glow around the seeker
-  runnerLightRadius: 115,
-  coneRays: 72,
-  auraRays: 40,
+  coneAngle: (72 * Math.PI) / 180,
+  coneRange: 260,
+  auraRadius: 56, // small glow all around the seeker
+  runnerLight: 120,
+  coneRays: 90,
+  circleRays: 56,
+  orbLight: 46,
+  flareLight: 150,
 };
 
 export const RULES = {
   minPlayers: 2,
   maxPlayers: 8,
-  revealMs: 3500,
+  revealMs: 4000,
   scatterMs: 10000,
   huntMs: 150000,
 
-  exposureFillSec: 1.6, // seconds of continuous light to catch
-  exposureDecaySec: 0.6, // seconds to fully drain once out of light
+  exposureFillSec: 1.5, // continuous light needed for a catch
+  exposureDecaySec: 0.6,
+  flareExposureScale: 0.5, // flares expose at half speed
 
-  rescueRadius: 46,
+  rescueRadius: 48,
   rescueSec: 2.2,
   rescueDecaySec: 3,
   rescueInvulnMs: 3000,
 
   orbRadius: 26,
-  /** Orbs the runner team needs to win. */
   orbsToWin: (runners: number) => 2 + runners * 2,
-  /** Orbs visible on the map at once. */
   activeOrbs: (runners: number) => Math.min(5, runners + 2),
 
   sneezeIdleMs: 10000,
   sneezeMoveThreshold: 28,
 
-  // Grace periods for dropped connections.
+  lockerRange: 46,
+  lockerMaxHideMs: 12000,
+  lockerSearchMs: 900,
+  lockerSearchCooldownMs: 2500,
+  lockersFor: (players: number) => 3 + Math.ceil(players / 2),
+
+  itemBoxes: 3,
+  itemRespawnMs: 9000,
+  itemPickupRadius: 30,
+
+  helpCooldownMs: 6000,
+
   lobbyDropMs: 20000,
-  seekerDropAbortMs: 25000,
+  reconnectWindowSec: 40,
+  seekerDropAbortMs: 30000,
   roomIdleMs: 10 * 60 * 1000,
 };
 
 export const ABILITIES = {
   polo: { cooldownMs: 18000, windowMs: 2600, jitter: 55 },
-  sprint: { cooldownMs: 10000, steps: Math.round(2 * TICK_RATE), multiplier: 1.6 },
-  dash: { cooldownMs: 6000, steps: 6, multiplier: 3.2 },
+  sprint: { cooldownMs: 10000, durationMs: 2000, multiplier: 1.6 },
+  dash: { cooldownMs: 6000, durationMs: 180, multiplier: 3.0 },
   boo: { cooldownMs: 7000 },
 };
+
+export const ITEMS = {
+  smoke: { radius: 85, durationMs: 7000 },
+  decoy: { durationMs: 5000 },
+  flash: { range: 270, blindMs: 2500 },
+  flare: { durationMs: 6000, throw: 70 },
+  trap: { radius: 22, rootMs: 2500, lifetimeMs: 60000 },
+};
+
+export type RunnerItem = "smoke" | "decoy" | "flash";
+export type SeekerItem = "flare" | "trap";
+export type Item = RunnerItem | SeekerItem;
+export const RUNNER_ITEMS: RunnerItem[] = ["smoke", "decoy", "flash"];
+export const SEEKER_ITEMS: SeekerItem[] = ["flare", "trap"];
 
 export const SCORING = {
   seekerCatch: 1,
@@ -84,15 +112,17 @@ export const SCORING = {
   runnerWin: 3,
 };
 
-export const PLAYER_COLORS = [
-  "#3498db",
-  "#2ecc71",
-  "#f39c12",
-  "#9b59b6",
-  "#1abc9c",
-  "#e91e63",
-  "#00bcd4",
-  "#cddc39",
-];
+/** Movement validation slack: phones report positions, the server checks them. */
+export const VALIDATION = {
+  speedSlack: 1.35,
+  distSlack: 26,
+  maxGapSec: 0.5,
+  boostGraceMs: 250,
+};
 
-export const SEEKER_COLOR = "#ff3b3b";
+export const PLAYER_COLORS = ["#38bdf8", "#4ade80", "#fbbf24", "#c084fc", "#2dd4bf", "#f472b6", "#a3e635", "#fb923c"];
+export const SEEKER_COLOR = "#ff3b5c";
+
+/** Little faces players pick in the lobby (rendered on their blob). */
+export const FACES = ["happy", "cool", "sly", "wow", "sleepy", "grin", "nerd", "cat"] as const;
+export type Face = (typeof FACES)[number];

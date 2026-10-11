@@ -20,6 +20,7 @@ export interface RecentRoom {
 }
 
 const K = {
+  face: "mon.face",
   hosts: "mon.hosts",
   seats: "mon.seats",
   recent: "mon.recent",
@@ -95,6 +96,14 @@ export function savedName(): string {
 
 export function saveName(name: string) {
   write(local, K.name, name);
+}
+
+export function savedFace(): number {
+  return read<number>(local, K.face, Math.floor(Math.random() * 8));
+}
+
+export function saveFace(face: number) {
+  write(local, K.face, face);
 }
 
 // ---- recent rooms

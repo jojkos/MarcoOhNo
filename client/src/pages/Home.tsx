@@ -4,9 +4,9 @@ import { Tv, Smartphone, ArrowRight, X, History, Loader2 } from "lucide-react";
 import type { RoomStatus } from "@shared/protocol";
 import { Logo, Screen, Panel, Chip } from "@/components/kit";
 import { HowToPlay } from "@/components/game/common";
-import { createRoom, roomStatus } from "@/lib/net";
+import { createRoom, roomStatus } from "@/lib/session";
 import { forgetRoom, recentRooms, type RecentRoom } from "@/lib/storage";
-import { unlockAudio } from "@/lib/sfx";
+import { unlockAudio } from "@/audio/sfx";
 import { cn } from "@/lib/utils";
 
 const PHASE_LABEL: Record<string, string> = {

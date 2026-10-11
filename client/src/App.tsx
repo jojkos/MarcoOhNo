@@ -1,7 +1,5 @@
-import { useEffect } from "react";
 import { Switch, Route, Redirect } from "wouter";
 import { Toaster } from "@/components/ui/toaster";
-import { initNet } from "@/lib/net";
 import { Home } from "@/pages/Home";
 import { Join } from "@/pages/Join";
 import { TvPage, PlayPage } from "@/pages/RoomPages";
@@ -9,7 +7,6 @@ import { TvPage, PlayPage } from "@/pages/RoomPages";
 const code = (raw: string) => raw.toUpperCase().slice(0, 4);
 
 export default function App() {
-  useEffect(() => initNet(), []);
   return (
     <>
       <Toaster />

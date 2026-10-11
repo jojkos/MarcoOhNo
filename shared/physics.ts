@@ -1,129 +1,124 @@
-import type { Wall } from "./protocol";
-import { PLAYER, TICK_DT } from "./config";
-import { angleDiff } from "./geometry";
+import { PLAYER } from "./config";
+import type { Rect } from "./geometry";
 
-export interface MoverState {
+export interface Body {
   x: number;
   y: number;
-  angle: number;
-  /** Remaining boosted steps (dash / sprint). */
-  boost: number;
-  boostMul: number;
+  vx: number;
+  vy: number;
 }
 
-export interface MoveCtx {
-  walls: Wall[];
-  width: number;
-  height: number;
-  speed: number;
+export interface MoveParams {
+  maxSpeed: number;
   /** Ghosts float through walls. */
   ghost: boolean;
-  /** Can't move at all (caged, or seeker during scatter). */
+  /** Can't move at all (caged, hiding, rooted, seeker counting...). */
   frozen: boolean;
-  /** rad/s, Infinity = face movement direction instantly. */
-  turnRate: number;
+  width: number;
+  height: number;
+  rects: readonly Rect[];
+  radius?: number;
 }
 
-const EPS = 0.01;
-const NUDGE_MAX = 11; // how far around a corner we auto-slide the player
+const MAX_SUBSTEP_PX = 5;
 
-function overlaps(x: number, y: number, h: number, w: Wall): boolean {
-  return x + h > w.x && x - h < w.x + w.w && y + h > w.y && y - h < w.y + w.h;
-}
-
-function firstHit(x: number, y: number, h: number, walls: Wall[]): Wall | null {
-  for (const w of walls) if (overlaps(x, y, h, w)) return w;
-  return null;
-}
-
-/** Move along one axis, stopping flush against walls. Returns the blocking wall if any. */
-function moveAxis(s: MoverState, axis: "x" | "y", delta: number, walls: Wall[]): Wall | null {
-  if (delta === 0) return null;
-  const h = PLAYER.hitHalf;
-  let blocked: Wall | null = null;
-  if (axis === "x") {
-    let nx = s.x + delta;
-    for (const w of walls) {
-      if (!overlaps(nx, s.y, h, w)) continue;
-      blocked = w;
-      nx = delta > 0 ? Math.min(nx, w.x - h - EPS) : Math.max(nx, w.x + w.w + h + EPS);
+/** Push a circle out of every rect it overlaps and cancel velocity into them. */
+export function resolveCollisions(b: Body, r: number, rects: readonly Rect[]) {
+  for (let iter = 0; iter < 3; iter++) {
+    let moved = false;
+    for (const w of rects) {
+      if (b.x + r <= w.x || b.x - r >= w.x + w.w || b.y + r <= w.y || b.y - r >= w.y + w.h) continue;
+      const cx = Math.max(w.x, Math.min(b.x, w.x + w.w));
+      const cy = Math.max(w.y, Math.min(b.y, w.y + w.h));
+      let nx = b.x - cx;
+      let ny = b.y - cy;
+      let d = Math.hypot(nx, ny);
+      let push: number;
+      if (d > 1e-6) {
+        if (d >= r) continue;
+        nx /= d;
+        ny /= d;
+        push = r - d;
+      } else {
+        // Centre inside the rect: leave along the shallowest axis.
+        const left = b.x - w.x;
+        const right = w.x + w.w - b.x;
+        const top = b.y - w.y;
+        const bottom = w.y + w.h - b.y;
+        const m = Math.min(left, right, top, bottom);
+        if (m === left) [nx, ny, push] = [-1, 0, left + r];
+        else if (m === right) [nx, ny, push] = [1, 0, right + r];
+        else if (m === top) [nx, ny, push] = [0, -1, top + r];
+        else [nx, ny, push] = [0, 1, bottom + r];
+      }
+      b.x += nx * (push + 0.01);
+      b.y += ny * (push + 0.01);
+      const vn = b.vx * nx + b.vy * ny;
+      if (vn < 0) {
+        b.vx -= nx * vn;
+        b.vy -= ny * vn;
+      }
+      moved = true;
     }
-    s.x = nx;
-  } else {
-    let ny = s.y + delta;
-    for (const w of walls) {
-      if (!overlaps(s.x, ny, h, w)) continue;
-      blocked = w;
-      ny = delta > 0 ? Math.min(ny, w.y - h - EPS) : Math.max(ny, w.y + w.h + h + EPS);
-    }
-    s.y = ny;
+    if (!moved) break;
   }
-  return blocked;
+}
+
+export function overlapsAny(x: number, y: number, r: number, rects: readonly Rect[], slack = 0): boolean {
+  const rr = r - slack;
+  for (const w of rects) {
+    const cx = Math.max(w.x, Math.min(x, w.x + w.w));
+    const cy = Math.max(w.y, Math.min(y, w.y + w.h));
+    if ((x - cx) ** 2 + (y - cy) ** 2 < rr * rr) return true;
+  }
+  return false;
 }
 
 /**
- * When the player pushes into a wall corner by only a few pixels, slide them
- * around it so they don't snag on corridor entrances.
+ * Advance a body by `dt` seconds towards joystick input (ix, iy) – magnitude 0..1.
+ * Smooth acceleration, sliding along walls, rounded corners (circle vs box).
  */
-function nudgeAroundCorner(s: MoverState, axis: "x" | "y", wall: Wall, budget: number, walls: Wall[]) {
-  const h = PLAYER.hitHalf;
-  const other = axis === "x" ? "y" : "x";
-  const pos = s[other];
-  const lo = other === "y" ? wall.y : wall.x;
-  const hi = other === "y" ? wall.y + wall.h : wall.x + wall.w;
-  const overlapLow = pos + h - lo; // amount we overlap past the wall's low edge
-  const overlapHigh = hi - (pos - h);
-  let shift = 0;
-  if (overlapLow > 0 && overlapLow <= NUDGE_MAX) shift = -Math.min(overlapLow + EPS, budget);
-  else if (overlapHigh > 0 && overlapHigh <= NUDGE_MAX) shift = Math.min(overlapHigh + EPS, budget);
-  if (shift === 0) return;
-  const test = { ...s, [other]: pos + shift };
-  if (!firstHit(test.x, test.y, h, walls)) s[other] = pos + shift;
+export function stepBody(b: Body, ix: number, iy: number, dt: number, p: MoveParams): void {
+  if (p.frozen) {
+    b.vx = 0;
+    b.vy = 0;
+    return;
+  }
+  const mag = Math.hypot(ix, iy);
+  if (mag > 1) {
+    ix /= mag;
+    iy /= mag;
+  }
+  const tx = ix * p.maxSpeed;
+  const ty = iy * p.maxSpeed;
+  const speeding = tx * tx + ty * ty >= b.vx * b.vx + b.vy * b.vy;
+  const k = 1 - Math.exp(-(speeding ? PLAYER.accel : PLAYER.decel) * dt);
+  b.vx += (tx - b.vx) * k;
+  b.vy += (ty - b.vy) * k;
+  if (Math.abs(b.vx) < 0.5 && Math.abs(b.vy) < 0.5 && mag < 0.05) {
+    b.vx = 0;
+    b.vy = 0;
+    return;
+  }
+
+  const r = p.radius ?? PLAYER.radius;
+  const travel = Math.hypot(b.vx, b.vy) * dt;
+  const n = Math.max(1, Math.ceil(travel / MAX_SUBSTEP_PX));
+  const h = dt / n;
+  for (let i = 0; i < n; i++) {
+    b.x += b.vx * h;
+    b.y += b.vy * h;
+    if (!p.ghost) resolveCollisions(b, r, p.rects);
+  }
+  b.x = Math.max(r, Math.min(p.width - r, b.x));
+  b.y = Math.max(r, Math.min(p.height - r, b.y));
 }
 
-/** Advance one fixed simulation step. Mutates and returns `s`. */
-export function stepMover(s: MoverState, mx: number, my: number, ctx: MoveCtx): MoverState {
-  const mag = Math.hypot(mx, my);
-  if (mag > 1) {
-    mx /= mag;
-    my /= mag;
-  }
-  const moving = mag > 0.12;
-
-  const mul = s.boost > 0 ? s.boostMul : 1;
-  if (s.boost > 0) s.boost--;
-
-  if (ctx.frozen) return s;
-
-  if (moving) {
-    const target = Math.atan2(my, mx);
-    if (!Number.isFinite(ctx.turnRate)) {
-      s.angle = target;
-    } else {
-      const d = angleDiff(target, s.angle);
-      const maxTurn = ctx.turnRate * TICK_DT;
-      s.angle += Math.abs(d) <= maxTurn ? d : Math.sign(d) * maxTurn;
-      s.angle = angleDiff(s.angle, 0);
-    }
-  }
-  if (!moving) return s;
-
-  const dist = ctx.speed * mul * TICK_DT;
-  const dx = mx * dist;
-  const dy = my * dist;
-  const h = PLAYER.hitHalf;
-
-  if (ctx.ghost) {
-    s.x += dx;
-    s.y += dy;
-  } else {
-    const bx = moveAxis(s, "x", dx, ctx.walls);
-    if (bx && Math.abs(my) < 0.5) nudgeAroundCorner(s, "x", bx, Math.abs(dx), ctx.walls);
-    const by = moveAxis(s, "y", dy, ctx.walls);
-    if (by && Math.abs(mx) < 0.5) nudgeAroundCorner(s, "y", by, Math.abs(dy), ctx.walls);
-  }
-
-  s.x = Math.max(h, Math.min(ctx.width - h, s.x));
-  s.y = Math.max(h, Math.min(ctx.height - h, s.y));
-  return s;
+/** Turn `angle` towards `target` by at most rate*dt (radians). */
+export function turnTowards(angle: number, target: number, rate: number, dt: number): number {
+  let d = (target - angle) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2;
+  if (d < -Math.PI) d += Math.PI * 2;
+  const max = rate * dt;
+  return angle + (Math.abs(d) <= max ? d : Math.sign(d) * max);
 }

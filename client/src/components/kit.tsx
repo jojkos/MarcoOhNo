@@ -1,6 +1,6 @@
 import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { ArrowLeft, type LucideIcon } from "lucide-react";
-import type { LobbyPlayer } from "@shared/protocol";
+import type { PlayerView } from "@/lib/gameStore";
 import { SEEKER_COLOR } from "@shared/config";
 import { cn } from "@/lib/utils";
 
@@ -224,7 +224,7 @@ export function Avatar({
   seeker = false,
   className,
 }: {
-  player: Pick<LobbyPlayer, "name" | "color" | "connected">;
+  player: Pick<PlayerView, "name" | "color" | "connected">;
   size?: number;
   seeker?: boolean;
   className?: string;

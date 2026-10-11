@@ -1,20 +1,42 @@
 import { useRef, useState } from "react";
-import { Megaphone, Zap, Wind, Ghost } from "lucide-react";
-import type { SnapPlayer } from "@shared/protocol";
+import { Megaphone, Zap, Wind, Ghost, Siren, Cloud, Copy, Sun, Flame, Target, DoorOpen, DoorClosed, Search, type LucideIcon } from "lucide-react";
+import { RULES } from "@shared/config";
 import { abilityCooldown, abilityFor, type Ability } from "@shared/rules";
-import { input } from "@/game/input";
+import type { ActionSlot } from "@shared/protocol";
+import { input, press } from "@/game/input";
+import { getRoom } from "@/lib/session";
+import type { PlayerView } from "@/lib/gameStore";
+import { haptic } from "@/audio/haptics";
+import { cn } from "@/lib/utils";
 
-const JOY_RADIUS = 56;
-const DEADZONE = 0.12;
+const JOY_RADIUS = 58;
+const DEADZONE = 0.1;
 
-const ABILITY_UI: Record<Ability, { label: string; icon: typeof Zap; bg: string; glow: string }> = {
+type Look = { label: string; icon: LucideIcon; bg: string; glow: string };
+
+const ABILITY_UI: Record<Ability, Look> = {
   polo: { label: "POLO", icon: Megaphone, bg: "linear-gradient(135deg,#c89bff,#7b3dff)", glow: "rgba(138,77,255,0.75)" },
   sprint: { label: "SPRINT", icon: Zap, bg: "linear-gradient(135deg,#ffc27a,#ff7a1a)", glow: "rgba(255,122,26,0.7)" },
   dash: { label: "DASH", icon: Wind, bg: "linear-gradient(135deg,#9dffd8,#16c98a)", glow: "rgba(34,227,154,0.7)" },
   boo: { label: "BOO", icon: Ghost, bg: "linear-gradient(135deg,#e2e8f0,#7c8aa5)", glow: "rgba(200,210,230,0.5)" },
+  help: { label: "HELP", icon: Siren, bg: "linear-gradient(135deg,#9dffd8,#16c98a)", glow: "rgba(34,227,154,0.7)" },
 };
 
-/** Floating joystick: touch anywhere on the left side of the screen. */
+const ITEM_UI: Record<string, Look> = {
+  smoke: { label: "SMOKE", icon: Cloud, bg: "linear-gradient(135deg,#e2e8f0,#64748b)", glow: "rgba(200,210,230,0.5)" },
+  decoy: { label: "DECOY", icon: Copy, bg: "linear-gradient(135deg,#d8b4fe,#9333ea)", glow: "rgba(168,85,247,0.6)" },
+  flash: { label: "FLASH", icon: Sun, bg: "linear-gradient(135deg,#fffbe0,#facc15)", glow: "rgba(250,204,21,0.7)" },
+  flare: { label: "FLARE", icon: Flame, bg: "linear-gradient(135deg,#fdba74,#ea580c)", glow: "rgba(234,88,12,0.7)" },
+  trap: { label: "TRAP", icon: Target, bg: "linear-gradient(135deg,#fda4af,#e11d48)", glow: "rgba(225,29,72,0.7)" },
+};
+
+const ACT_UI: Record<"hide" | "leave" | "search", Look> = {
+  hide: { label: "HIDE", icon: DoorClosed, bg: "linear-gradient(135deg,#93c5fd,#2563eb)", glow: "rgba(37,99,235,0.7)" },
+  leave: { label: "LEAVE", icon: DoorOpen, bg: "linear-gradient(135deg,#93c5fd,#2563eb)", glow: "rgba(37,99,235,0.7)" },
+  search: { label: "SEARCH", icon: Search, bg: "linear-gradient(135deg,#fda4af,#e11d48)", glow: "rgba(225,29,72,0.7)" },
+};
+
+/** Floating joystick: touch anywhere on the left part of the screen. */
 function Joystick() {
   const [base, setBase] = useState<{ x: number; y: number } | null>(null);
   const [knob, setKnob] = useState({ x: 0, y: 0 });
@@ -34,8 +56,8 @@ function Joystick() {
       input.joyX = 0;
       input.joyY = 0;
     } else {
-      // Ease out of the deadzone so small pushes allow slow sneaking.
-      const scaled = Math.min(1, (mag - DEADZONE) / (0.8 - DEADZONE));
+      // Ease out of the deadzone; small pushes let you sneak slowly.
+      const scaled = Math.min(1, (mag - DEADZONE) / (0.75 - DEADZONE));
       input.joyX = (dx / (len || 1)) * scaled;
       input.joyY = (dy / (len || 1)) * scaled;
     }
@@ -51,7 +73,7 @@ function Joystick() {
 
   return (
     <div
-      className="absolute left-0 bottom-0 top-16 w-[60%] touch-none select-none"
+      className="absolute bottom-0 left-0 top-16 w-[58%] touch-none select-none"
       onPointerDown={(e) => {
         if (pointer.current !== null) return;
         pointer.current = e.pointerId;
@@ -88,41 +110,90 @@ function Joystick() {
   );
 }
 
-function AbilityButton({ ability, cooldown, slot }: { ability: Ability; cooldown: number; slot: "a" | "b" }) {
-  const ui = ABILITY_UI[ability];
-  const Icon = ui.icon;
+function ActionButton({
+  look,
+  slot,
+  size,
+  cooldown = 0,
+  cooldownMax = 1,
+  progress,
+  testId,
+}: {
+  look: Look;
+  slot: ActionSlot;
+  size: number;
+  cooldown?: number;
+  cooldownMax?: number;
+  progress?: number;
+  testId: string;
+}) {
+  const Icon = look.icon;
   const ready = cooldown <= 0;
-  const pct = ready ? 100 : 100 - (cooldown / abilityCooldown(ability)) * 100;
+  const pct = ready ? 100 : 100 - (cooldown / cooldownMax) * 100;
   return (
     <button
-      className="relative flex h-[88px] w-[88px] touch-none select-none flex-col items-center justify-center rounded-full border-2 border-white/30 font-display text-xs font-bold tracking-wider text-white transition-transform active:scale-90"
-      style={
-        ready
-          ? { background: ui.bg, boxShadow: `0 0 30px -4px ${ui.glow}, inset 0 2px 0 rgba(255,255,255,0.35)`, textShadow: "0 1px 2px rgba(0,0,0,0.4)" }
-          : { background: `conic-gradient(rgba(255,255,255,0.28) ${pct}%, rgb(30 33 48) ${pct}% 100%)` }
-      }
+      className={cn(
+        "relative flex touch-none select-none flex-col items-center justify-center rounded-full border-2 border-white/30 font-display font-bold tracking-wider text-white transition-transform active:scale-90",
+        size >= 80 ? "text-xs" : "text-[10px]",
+      )}
+      style={{
+        width: size,
+        height: size,
+        ...(ready
+          ? { background: look.bg, boxShadow: `0 0 30px -4px ${look.glow}, inset 0 2px 0 rgba(255,255,255,0.35)`, textShadow: "0 1px 2px rgba(0,0,0,0.4)" }
+          : { background: `conic-gradient(rgba(255,255,255,0.28) ${pct}%, rgb(30 33 48) ${pct}% 100%)` }),
+      }}
       onPointerDown={(e) => {
         e.preventDefault();
-        if (slot === "a") input.pressA = true;
-        else input.pressB = true;
+        press(slot);
+        haptic.tap();
       }}
-      data-testid={`button-${ability}`}
+      data-testid={testId}
     >
-      <Icon className="mb-0.5 h-7 w-7" />
-      {ready ? ui.label : Math.ceil(cooldown / 1000)}
+      {progress !== undefined && progress > 0 && (
+        <svg className="absolute inset-0 -rotate-90" viewBox="0 0 100 100">
+          <circle cx="50" cy="50" r="47" fill="none" stroke="white" strokeWidth="5" strokeDasharray={`${progress * 295} 295`} />
+        </svg>
+      )}
+      <Icon className={size >= 80 ? "mb-0.5 h-7 w-7" : "mb-0.5 h-5 w-5"} />
+      {ready ? look.label : Math.ceil(cooldown / 1000)}
     </button>
   );
 }
 
-export function MobileControls({ me }: { me: SnapPlayer }) {
+/** Context action: hide/leave a locker (runner) or search one (seeker). */
+function contextAction(me: PlayerView): "hide" | "leave" | "search" | null {
+  if (me.role === "runner") {
+    if (me.status !== "free") return null;
+    if (me.locker >= 0) return "leave";
+  }
+  const lockers = getRoom()?.state.round?.lockers;
+  if (!lockers) return null;
+  let near = false;
+  lockers.forEach((l) => {
+    if (Math.hypot(l.x - me.x, l.y - me.y) <= RULES.lockerRange && !(me.role === "seeker" && l.checked)) near = true;
+  });
+  if (!near) return null;
+  return me.role === "seeker" ? "search" : "hide";
+}
+
+export function MobileControls({ me, hunt }: { me: PlayerView; hunt: boolean }) {
   const a = abilityFor(me.role, me.status, "a");
   const b = abilityFor(me.role, me.status, "b");
+  const act = hunt ? contextAction(me) : null;
+  const item = me.item ? ITEM_UI[me.item] : undefined;
   return (
     <>
-      <Joystick />
-      <div className="absolute right-4 bottom-[max(1.5rem,env(safe-area-inset-bottom))] flex flex-col items-center gap-4 z-20">
-        {b && <AbilityButton ability={b} cooldown={me.cdB} slot="b" />}
-        {a && <AbilityButton ability={a} cooldown={me.cdA} slot="a" />}
+      {me.locker < 0 && <Joystick />}
+      <div className="absolute bottom-[max(1.25rem,env(safe-area-inset-bottom))] right-3 z-20 grid grid-cols-[auto_auto] items-end gap-3">
+        <div className="flex flex-col items-center gap-3">
+          {act && <ActionButton look={ACT_UI[act]} slot="act" size={70} progress={me.searching} testId={`button-${act}`} />}
+          {item && <ActionButton look={item} slot="item" size={64} testId="button-item" />}
+        </div>
+        <div className="flex flex-col items-center gap-3">
+          {b && <ActionButton look={ABILITY_UI[b]} slot="b" size={66} cooldown={me.cdB} cooldownMax={abilityCooldown(b)} testId={`button-${b}`} />}
+          {a && <ActionButton look={ABILITY_UI[a]} slot="a" size={90} cooldown={me.cdA} cooldownMax={abilityCooldown(a)} testId={`button-${a}`} />}
+        </div>
       </div>
     </>
   );

@@ -1,5 +1,5 @@
 import { Flashlight, Ghost, Lock, WifiOff, Footprints, HeartHandshake } from "lucide-react";
-import type { SnapPlayer } from "@shared/protocol";
+import type { PlayerView } from "@/lib/gameStore";
 import { cn } from "@/lib/utils";
 
 export function formatTime(ms: number) {
@@ -21,7 +21,7 @@ export async function joinBase(): Promise<string> {
   return origin;
 }
 
-export function StatusIcon({ p, connected, className }: { p?: SnapPlayer; connected: boolean; className?: string }) {
+export function StatusIcon({ p, connected, className }: { p?: PlayerView; connected: boolean; className?: string }) {
   const c = cn("h-4 w-4", className);
   if (!connected) return <WifiOff className={cn(c, "text-muted-foreground")} />;
   if (!p) return null;

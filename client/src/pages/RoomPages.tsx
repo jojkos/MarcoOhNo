@@ -2,19 +2,21 @@ import { useEffect, useState } from "react";
 import { navigate } from "wouter/use-browser-location";
 import { Loader2, DoorClosed, MonitorSmartphone, UserX } from "lucide-react";
 import { useGameStore } from "@/lib/gameStore";
-import { attachPlay, attachTv, createRoom, detach, retryAttach } from "@/lib/net";
+import { attachPlay, attachTv, createRoom, detach, retryAttach } from "@/lib/session";
 import { forgetRoom, seatFor } from "@/lib/storage";
+import { useGameAudio } from "@/audio/useGameAudio";
 import { Btn, Notice, Screen } from "@/components/kit";
 import { TVLobby } from "@/components/game/TVLobby";
 import { TVGameView } from "@/components/game/TVGameView";
 import { MobileLobby } from "@/components/game/MobileLobby";
 import { MobileGameView } from "@/components/game/MobileGameView";
 
-function Connecting({ code }: { code: string }) {
+function Connecting({ code, text }: { code: string; text?: string }) {
   return (
     <Screen className="flex flex-col items-center justify-center gap-4 text-muted-foreground">
       <Loader2 className="h-10 w-10 animate-spin text-neon-cyan" />
       <p className="font-display uppercase tracking-[0.3em]">Room {code}</p>
+      {text && <p className="text-sm">{text}</p>}
     </Screen>
   );
 }
@@ -22,7 +24,8 @@ function Connecting({ code }: { code: string }) {
 /** The shared screen: hosts the room if this browser created it, otherwise watches. */
 export function TvPage({ code }: { code: string }) {
   const attachment = useGameStore((s) => s.attachment);
-  const room = useGameStore((s) => s.room);
+  const phase = useGameStore((s) => s.view?.phase);
+  useGameAudio("tv");
 
   useEffect(() => {
     attachTv(code);
@@ -63,16 +66,17 @@ export function TvPage({ code }: { code: string }) {
     );
   }
 
-  if (!room || attachment?.status !== "attached") return <Connecting code={code} />;
-  return room.phase === "lobby" ? <TVLobby /> : <TVGameView />;
+  if (!phase || !attachment || attachment.status === "connecting") return <Connecting code={code} />;
+  return phase === "lobby" ? <TVLobby /> : <TVGameView />;
 }
 
 /** A player's phone. Needs a seat saved for this room, otherwise goes to the join form. */
 export function PlayPage({ code }: { code: string }) {
   const attachment = useGameStore((s) => s.attachment);
-  const room = useGameStore((s) => s.room);
-  // Checked once on entry: a seat dropped later (room gone) should show an error, not bounce to the join form.
+  const phase = useGameStore((s) => s.view?.phase);
+  // Checked once on entry: a seat dropped later (room gone) shows an error instead.
   const [hasSeat] = useState(() => !!seatFor(code));
+  useGameAudio("mobile");
 
   useEffect(() => {
     if (!hasSeat) {
@@ -118,6 +122,6 @@ export function PlayPage({ code }: { code: string }) {
     );
   }
 
-  if (!room || attachment?.status !== "attached") return <Connecting code={code} />;
-  return room.phase === "lobby" ? <MobileLobby /> : <MobileGameView />;
+  if (!phase || !attachment || attachment.status === "connecting") return <Connecting code={code} />;
+  return phase === "lobby" ? <MobileLobby /> : <MobileGameView />;
 }

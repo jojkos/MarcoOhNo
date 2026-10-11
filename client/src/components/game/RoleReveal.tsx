@@ -1,5 +1,5 @@
 import { Flashlight, Footprints } from "lucide-react";
-import type { Role } from "@shared/protocol";
+import type { Role } from "@shared/schema";
 import { cn } from "@/lib/utils";
 
 export function RoleReveal({ role, seekerName, orbs }: { role: Role; seekerName: string; orbs: number }) {

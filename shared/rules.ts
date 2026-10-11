@@ -1,15 +1,14 @@
-import type { Phase, Role, Status, Wall } from "./protocol";
 import { ABILITIES, PLAYER } from "./config";
-import type { MoveCtx } from "./physics";
+import type { Phase, Role, Status } from "./schema";
 
-export type Ability = "polo" | "sprint" | "dash" | "boo";
+export type Ability = "polo" | "sprint" | "dash" | "boo" | "help";
 
-/** Which ability sits in which button for a given player. */
+/** Which ability sits on which button. */
 export function abilityFor(role: Role, status: Status, slot: "a" | "b"): Ability | null {
   if (role === "seeker") return slot === "a" ? "polo" : "sprint";
   if (status === "ghost") return slot === "a" ? "boo" : null;
-  if (status === "free") return slot === "a" ? "dash" : null;
-  return null;
+  if (status === "caged") return slot === "a" ? "help" : null;
+  return slot === "a" ? "dash" : null;
 }
 
 export function abilityAllowed(ability: Ability, phase: Phase): boolean {
@@ -18,36 +17,37 @@ export function abilityAllowed(ability: Ability, phase: Phase): boolean {
 }
 
 export function abilityCooldown(ability: Ability): number {
-  return ABILITIES[ability].cooldownMs;
+  switch (ability) {
+    case "polo":
+      return ABILITIES.polo.cooldownMs;
+    case "sprint":
+      return ABILITIES.sprint.cooldownMs;
+    case "dash":
+      return ABILITIES.dash.cooldownMs;
+    case "boo":
+      return ABILITIES.boo.cooldownMs;
+    case "help":
+      return 6000;
+  }
 }
 
-/** Movement boost granted by an ability, if any. */
-export function abilityBoost(ability: Ability): { steps: number; mul: number } | null {
-  if (ability === "dash") return { steps: ABILITIES.dash.steps, mul: ABILITIES.dash.multiplier };
-  if (ability === "sprint") return { steps: ABILITIES.sprint.steps, mul: ABILITIES.sprint.multiplier };
-  return null;
+export function baseSpeed(role: Role, status: Status): number {
+  if (role === "seeker") return PLAYER.seekerSpeed;
+  return status === "ghost" ? PLAYER.ghostSpeed : PLAYER.runnerSpeed;
 }
 
-export function isFrozen(role: Role, status: Status, phase: Phase): boolean {
-  if (phase === "reveal" || phase === "round_over" || phase === "lobby") return true;
-  if (phase === "scatter" && role === "seeker") return true;
-  return status === "caged";
+export interface FreezeInput {
+  role: Role;
+  status: Status;
+  locker: number;
+  rooted: boolean;
+  searching: number;
 }
 
-export function moveCtxFor(
-  role: Role,
-  status: Status,
-  phase: Phase,
-  map: { walls: Wall[]; width: number; height: number },
-): MoveCtx {
-  const ghost = status === "ghost";
-  return {
-    walls: map.walls,
-    width: map.width,
-    height: map.height,
-    ghost,
-    frozen: isFrozen(role, status, phase),
-    speed: role === "seeker" ? PLAYER.seekerSpeed : ghost ? PLAYER.ghostSpeed : PLAYER.runnerSpeed,
-    turnRate: role === "seeker" ? PLAYER.seekerTurnRate : Infinity,
-  };
+/** Whether a player may move right now. */
+export function isFrozen(p: FreezeInput, phase: Phase): boolean {
+  if (phase === "lobby" || phase === "reveal" || phase === "round_over") return true;
+  if (phase === "scatter" && p.role === "seeker") return true;
+  if (p.status === "caged") return true;
+  return p.locker >= 0 || p.rooted || p.searching > 0;
 }

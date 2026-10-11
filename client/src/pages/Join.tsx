@@ -3,9 +3,11 @@ import { navigate } from "wouter/use-browser-location";
 import { UserRound, Loader2, CheckCircle2, AlertTriangle, Hourglass } from "lucide-react";
 import type { RoomStatus } from "@shared/protocol";
 import { Screen, Panel, Btn, CodeInput, TextField, BackButton, Logo } from "@/components/kit";
-import { joinRoom, roomStatus } from "@/lib/net";
-import { savedName, seatFor } from "@/lib/storage";
-import { unlockAudio } from "@/lib/sfx";
+import { joinRoom, roomStatus } from "@/lib/session";
+import { saveFace, savedFace, savedName, seatFor } from "@/lib/storage";
+import { FACES } from "@shared/config";
+import { Blob } from "@/components/game/Blob";
+import { unlockAudio } from "@/audio/sfx";
 
 function goBack() {
   if (window.history.length > 1) window.history.back();
@@ -43,6 +45,7 @@ function StatusLine({ code, status }: { code: string; status: RoomStatus | null 
 export function Join({ initialCode }: { initialCode?: string }) {
   const [code, setCode] = useState((initialCode ?? "").toUpperCase().slice(0, 4));
   const [name, setName] = useState(savedName());
+  const [face, setFace] = useState(savedFace());
   const [status, setStatus] = useState<RoomStatus | null | "loading">(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -64,7 +67,8 @@ export function Join({ initialCode }: { initialCode?: string }) {
     unlockAudio();
     setBusy(true);
     setError(null);
-    const res = await joinRoom(code, name.trim());
+    saveFace(face);
+    const res = await joinRoom(code, name.trim(), face);
     setBusy(false);
     if (res.ok) navigate(`/play/${res.code}`, { replace: true });
     else setError(res.error);
@@ -114,6 +118,23 @@ export function Join({ initialCode }: { initialCode?: string }) {
               enterKeyHint="go"
               data-testid="input-player-name"
             />
+            <div>
+              <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Pick a face</span>
+              <div className="grid grid-cols-8 gap-1">
+                {FACES.map((f, i) => (
+                  <button
+                    key={f}
+                    type="button"
+                    onClick={() => setFace(i)}
+                    className={`flex items-center justify-center rounded-xl p-1 transition ${face === i ? "bg-white/10 ring-2 ring-neon-mint" : "opacity-60 hover:opacity-100"}`}
+                    aria-label={f}
+                    data-testid={`face-${f}`}
+                  >
+                    <Blob color="#4ade80" face={i} size={34} glow={face === i} />
+                  </button>
+                ))}
+              </div>
+            </div>
             {error && (
               <p className="flex items-center gap-2 rounded-xl bg-neon-red/10 px-3 py-2 text-sm text-neon-red" data-testid="text-error">
                 <AlertTriangle className="h-4 w-4 shrink-0" /> {error}

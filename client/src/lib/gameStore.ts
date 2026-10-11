@@ -1,43 +1,67 @@
 import { create } from "zustand";
-import type { Phase, RoomInfo, SnapPlayer } from "@shared/protocol";
+import type { Phase, Role, Status } from "@shared/schema";
+import type { RoundResult } from "@shared/protocol";
 
-/** Slow-changing HUD data, refreshed from snapshots ~10x per second. */
-export interface Hud {
+/** Plain-object copy of a synced player, for React. */
+export interface PlayerView {
+  id: string;
+  name: string;
+  color: string;
+  face: number;
+  isBot: boolean;
+  connected: boolean;
+  score: number;
+  inRound: boolean;
+  role: Role;
+  status: Status;
+  exposure: number;
+  rescue: number;
+  invuln: boolean;
+  locker: number;
+  rooted: boolean;
+  blinded: boolean;
+  searching: number;
+  cdA: number;
+  cdB: number;
+  item: string;
+  x: number;
+  y: number;
+}
+
+/** What React renders: refreshed ~10x/s from the synced state (immediately on phase changes). */
+export interface RoomView {
+  code: string;
   phase: Phase;
   phaseLeft: number;
+  vipId: string;
+  hostConnected: boolean;
   collected: number;
-  players: SnapPlayer[];
-  me: SnapPlayer | null;
-  /** Some runner is close to being caught (drives the TV's red pulse). */
+  players: PlayerView[];
+  round: { id: number; seekerId: string; orbsToWin: number } | null;
+  result: RoundResult | null;
+  /** Some runner is close to being caught (TV's red pulse). */
   danger: boolean;
-  /** 0..1 how close the seeker is to me (runners only). */
-  threat: number;
 }
 
 export type AttachMode = "tv" | "play";
 
-/** Which room this tab is following, and how that's going. */
 export interface Attachment {
   mode: AttachMode;
   code: string;
-  status: "connecting" | "attached" | "error";
-  /** TV screens that own the host token can start rounds; others just watch. */
+  status: "connecting" | "attached" | "reconnecting" | "error";
+  /** TV screens holding the host token control the room; others only watch. */
   isHost: boolean;
   error?: { reason: string; message: string };
 }
 
 interface GameStore {
-  connected: boolean;
   attachment: Attachment | null;
   playerId: string | null;
-  room: RoomInfo | null;
-  hud: Hud | null;
+  view: RoomView | null;
 }
 
-export const useGameStore = create<GameStore>(() => ({
-  connected: false,
-  attachment: null,
-  playerId: null,
-  room: null,
-  hud: null,
-}));
+export const useGameStore = create<GameStore>(() => ({ attachment: null, playerId: null, view: null }));
+
+export function useMe(): PlayerView | null {
+  return useGameStore((s) => s.view?.players.find((p) => p.id === s.playerId) ?? null);
+}

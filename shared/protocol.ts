@@ -1,37 +1,73 @@
-// Wire protocol between server and clients.
+// Messages between clients and the PartyRoom (everything that isn't synced state).
+import type { Item } from "./config";
+import type { Phase, Role, Status } from "./schema";
 
-export interface Wall {
-  /** Top-left corner. */
+export const ROOM_NAME = "party";
+
+/** Options passed to client.create()/joinById(). */
+export type JoinOptions =
+  | { role: "tv"; hostToken?: string }
+  | { role: "watch" }
+  | { role: "player"; name?: string; seatToken?: string; face?: number };
+
+/** Error codes thrown from onAuth (ServerError). The SDK surfaces them as `code`. */
+export const JoinError = {
+  NOT_FOUND: 4404,
+  BAD_TOKEN: 4401,
+  FULL: 4409,
+  IN_PROGRESS: 4423,
+  NAME_TAKEN: 4410,
+  BAD_NAME: 4422,
+  SEAT_EXPIRED: 4411,
+} as const;
+export type JoinErrorCode = (typeof JoinError)[keyof typeof JoinError];
+
+// ---------------------------------------------------------------- client -> server
+
+export interface MoveMsg {
   x: number;
   y: number;
-  w: number;
-  h: number;
+  vx: number;
+  vy: number;
+  a: number;
 }
 
-export type Phase = "lobby" | "reveal" | "scatter" | "hunt" | "round_over";
-export type Role = "seeker" | "runner";
-/** Runner lifecycle: free -> caged (rescuable) -> ghost (out for good, can haunt). */
-export type Status = "free" | "caged" | "ghost";
+/** a = primary ability, b = secondary ability, item = use held item, act = context action (locker). */
+export type ActionSlot = "a" | "b" | "item" | "act";
 
-export interface LobbyPlayer {
+export interface ClientMessages {
+  move: MoveMsg;
+  action: { slot: ActionSlot };
+  start: void;
+  toLobby: void;
+  addBot: void;
+  removeBot: void;
+  setFace: { face: number };
+  ping: { t: number };
+  whoami: void;
+  leaveSeat: void;
+}
+
+// ---------------------------------------------------------------- server -> client
+
+export type FxEvent =
+  | { k: "polo"; pings: { x: number; y: number }[]; targets: string[] }
+  | { k: "noise"; x: number; y: number; polo: boolean; why: "orb" | "sneeze" | "boo" | "locker" | "trap" }
+  | { k: "caught"; id: string; by: string; x: number; y: number; ghost: boolean }
+  | { k: "freed"; id: string; by: string; x: number; y: number }
+  | { k: "orb"; x: number; y: number; by: string }
+  | { k: "item"; id: string; item: Item; x: number; y: number }
+  | { k: "use"; id: string; item: Item | "dash" | "sprint" | "boo"; x: number; y: number }
+  | { k: "flash"; x: number; y: number; hit: boolean }
+  | { k: "decoyPop"; x: number; y: number }
+  | { k: "locker"; id: number; what: "enter" | "exit" | "search" | "empty" | "found" }
+  | { k: "help"; id: string; x: number; y: number }
+  | { k: "trapped"; id: string; x: number; y: number };
+
+export interface Award {
   id: string;
-  name: string;
-  color: string;
-  connected: boolean;
-  score: number;
-  timesSeeker: number;
-}
-
-export interface RoundInfo {
-  id: number;
-  width: number;
-  height: number;
-  cols: number;
-  rows: number;
-  walls: Wall[];
-  seekerId: string;
-  orbsToWin: number;
-  spawn: { x: number; y: number };
+  title: string;
+  detail: string;
 }
 
 export interface PlayerResult {
@@ -48,89 +84,20 @@ export interface RoundResult {
   winner: "seeker" | "runners" | "aborted";
   reason: string;
   players: PlayerResult[];
+  awards: Award[];
 }
 
-/** Low-frequency room state, sent whenever it changes. */
-export interface RoomInfo {
-  code: string;
-  phase: Phase;
-  vipId: string | null;
-  players: LobbyPlayer[];
-  round: RoundInfo | null;
-  result: RoundResult | null;
+export interface ServerMessages {
+  host: { hostToken: string };
+  seat: { seatToken: string; playerId: string; name: string };
+  watching: {};
+  fx: FxEvent[];
+  /** Your reported position was rejected; snap here. */
+  correct: { x: number; y: number };
+  pong: { t: number; server: number };
+  notice: string;
+  kicked: string;
 }
-
-export interface SnapPlayer {
-  id: string;
-  x: number;
-  y: number;
-  angle: number;
-  role: Role;
-  status: Status;
-  /** 0..1 how close to being caught. */
-  exposure: number;
-  /** 0..1 rescue progress while caged. */
-  rescue: number;
-  /** Currently visible to the seeker (in cone or aura with line of sight). */
-  lit: boolean;
-  invuln: boolean;
-  /** Last input sequence the server applied for this player. */
-  ack: number;
-  /** Remaining boosted movement steps (dash/sprint), needed for prediction replay. */
-  boost: number;
-  boostMul: number;
-  cdA: number;
-  cdB: number;
-  connected: boolean;
-}
-
-export interface Orb {
-  id: number;
-  x: number;
-  y: number;
-}
-
-/** High-frequency state, sent every tick while a round is running. */
-export interface Snapshot {
-  tick: number;
-  phase: Phase;
-  phaseLeft: number;
-  players: SnapPlayer[];
-  orbs: Orb[];
-  collected: number;
-  poloActive: boolean;
-}
-
-export type FxEvent =
-  | { k: "polo"; pings: { x: number; y: number }[]; targets: string[] }
-  | { k: "noise"; x: number; y: number; polo: boolean }
-  | { k: "caught"; id: string; x: number; y: number; ghost: boolean }
-  | { k: "freed"; id: string; by: string }
-  | { k: "orb"; x: number; y: number; by: string };
-
-export interface InputMsg {
-  seq: number;
-  mx: number;
-  my: number;
-  /** Primary ability: seeker=Polo, runner=Dash, ghost=Boo. */
-  a?: 1;
-  /** Secondary ability: seeker=Sprint. */
-  b?: 1;
-}
-
-export type Ack<T> = (res: T) => void;
-
-export type JoinErrorReason = "not_found" | "full" | "in_progress" | "name_taken" | "bad_name" | "seat_expired";
-
-export type JoinResult =
-  | { ok: true; playerId: string; token: string; code: string; name: string }
-  | { ok: false; error: string; reason: JoinErrorReason };
-
-export type HostResult =
-  | { ok: true; code: string; hostToken: string }
-  | { ok: false; error: string; reason: "not_found" | "bad_token" };
-
-export type WatchResult = { ok: true; code: string } | { ok: false; error: string; reason: "not_found" };
 
 /** GET /api/rooms/:code */
 export interface RoomStatus {
@@ -138,31 +105,4 @@ export interface RoomStatus {
   phase?: Phase;
   players?: number;
   joinable?: boolean;
-}
-
-export interface ServerToClientEvents {
-  room: (room: RoomInfo) => void;
-  snap: (snap: Snapshot) => void;
-  fx: (events: FxEvent[]) => void;
-  notice: (message: string) => void;
-  /** This client was detached from its room (seat opened elsewhere, room closed...). */
-  kicked: (reason: string) => void;
-}
-
-export interface ClientToServerEvents {
-  /** TV creates a brand new room. */
-  createRoom: (cb: Ack<HostResult>) => void;
-  /** TV reclaims a room it created (host token). Never creates a room implicitly. */
-  hostRoom: (req: { code: string; hostToken: string }, cb: Ack<HostResult>) => void;
-  /** Extra screen watching a room without controlling it. */
-  watchRoom: (req: { code: string }, cb: Ack<WatchResult>) => void;
-  /** Phone joins a room by name, or resumes its seat with a token. */
-  join: (req: { code: string; name?: string; token?: string }, cb: Ack<JoinResult>) => void;
-  /** Stop following the room but keep the seat (navigated away). */
-  detach: () => void;
-  /** Give up the seat for good. */
-  leave: () => void;
-  start: () => void;
-  toLobby: () => void;
-  input: (inputs: InputMsg[]) => void;
 }

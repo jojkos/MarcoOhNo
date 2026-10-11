@@ -1,7 +1,5 @@
 import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { ArrowLeft, type LucideIcon } from "lucide-react";
-import type { PlayerView } from "@/lib/gameStore";
-import { SEEKER_COLOR } from "@shared/config";
 import { cn } from "@/lib/utils";
 
 // ------------------------------------------------------------------ backdrop
@@ -217,36 +215,6 @@ export function CodeInput({ value, onChange, autoFocus }: { value: string; onCha
 }
 
 // ------------------------------------------------------------------ players
-
-export function Avatar({
-  player,
-  size = 40,
-  seeker = false,
-  className,
-}: {
-  player: Pick<PlayerView, "name" | "color" | "connected">;
-  size?: number;
-  seeker?: boolean;
-  className?: string;
-}) {
-  const color = seeker ? SEEKER_COLOR : player.color;
-  return (
-    <div
-      className={cn("relative flex shrink-0 items-center justify-center rounded-full font-display font-bold text-white", className)}
-      style={{
-        width: size,
-        height: size,
-        fontSize: size * 0.44,
-        background: `radial-gradient(circle at 35% 30%, ${color}ee, ${color}88 70%)`,
-        boxShadow: player.connected ? `0 0 ${size * 0.45}px -${size * 0.12}px ${color}, inset 0 0 0 2px rgb(255 255 255 / 0.25)` : undefined,
-        opacity: player.connected ? 1 : 0.35,
-        textShadow: "0 1px 2px rgb(0 0 0 / 0.5)",
-      }}
-    >
-      {player.name.charAt(0).toUpperCase()}
-    </div>
-  );
-}
 
 export function Chip({ children, className }: { children: ReactNode; className?: string }) {
   return (

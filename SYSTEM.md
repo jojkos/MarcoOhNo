@@ -2,118 +2,147 @@
 
 A couch-party hide-and-seek game. One screen everyone can see (the **TV**) shows the seeker's
 flashlight view; every player uses their **phone** as controller and private screen.
+All tuning lives in `shared/config.ts`.
 
 ## Game rules
 
-**Roles.** Each round, one player is the **Seeker** and everyone else is a **Runner**. The seeker
-rotates so everyone gets a turn, and points carry across rounds.
-
-**Round phases** (`shared/protocol.ts` → `Phase`):
+**Roles.** Each round one player is the **Seeker**, everyone else is a **Runner**. The seeker
+rotates (humans before bots) and points carry across rounds.
 
 | Phase | Length | What happens |
 |---|---|---|
-| `reveal` | 3.5 s | TV announces the seeker; phones show your role. Nobody moves. |
-| `scatter` | 10 s | Runners see the whole maze lit and run to hide. The seeker is frozen and blind (TV is black). |
-| `hunt` | 150 s | Lights out. The TV shows only the seeker's flashlight. |
-| `round_over` | – | Results and scores. Host/VIP starts the next round or returns to the lobby. |
+| `reveal` | 4 s | TV announces the seeker; phones show your role. Nobody moves. |
+| `scatter` | 10 s | The maze is lit for runners, who run off to hide. The seeker is frozen and the TV counts down. |
+| `hunt` | 150 s | Lights out. The TV shows only what the seeker's light reveals. |
+| `round_over` | – | Winner, awards and leaderboard. Host or VIP starts the next round or returns to the lobby. |
 
 **Win conditions.**
-- **Runners win** by collecting `orbsToWin` orbs as a team (`2 + 2 × runners`). A few orbs are on the map at a time; new ones appear as they're picked up.
-- **Seeker wins** if, at any moment, no runner is free (all caged or ghosts), **or** when the timer runs out. Hiding in a corner doesn't win; runners must play the objective.
+- **Runners win** by charging `orbsToWin = 3 + 2 × runners` orbs. Standing on an orb charges it in
+  2 s (faster with friends); stepping off drains the charge. A charging orb glows brighter, which the
+  seeker can see. Only a few orbs are out at once and a new one appears 5 s after one is taken.
+- **Seeker wins** the moment no runner is free (all caged or ghosts), or when the timer runs out.
 
-**Catching.** A runner inside the seeker's cone (70°, 250 px) or close aura (55 px), with line of
-sight, fills an exposure meter (1.6 s to fill, drains quickly when out of light).
-- 1st catch → **caged** at that spot. A free teammate standing next to the cage for ~2.2 s frees
-  them, with 3 s of invulnerability. Cages are visible to everyone, so the seeker can camp them.
-- 2nd catch → **ghost**. Ghosts float through walls, can't be caught or collect orbs, and can **BOO**.
+**Catching.** A runner in the seeker's cone (72°, 260 px) or aura (56 px), in line of sight, fills an
+exposure meter: 1.5 s with 4+ runners, a bit longer for small groups. It drains when out of light.
+- 1st catch: **caged**. A free teammate next to the cage frees you in 2.2 s (then 3 s invulnerable).
+  Alone you pick the lock in 30 s. Caged players have a **HELP** button that pings teammates.
+- 2nd catch: **ghost**. Ghosts float through walls, can't be caught or charge orbs, and can **BOO**.
 
-**Abilities** (cooldowns in `shared/config.ts` → `ABILITIES`):
-- Seeker: **POLO**: every free runner shows a ring near (not exactly at) their position. **SPRINT**: a short speed boost.
-- Runner: **DASH**: a short burst.
-- Ghost: **BOO**: a fake noise on the seeker's view. During a POLO it looks exactly like a real POLO ring.
+**Abilities** (`ABILITIES`): seeker **POLO** (rings near every free runner) and **SPRINT**;
+runner **DASH**; ghost **BOO** (a fake noise, indistinguishable from a real POLO ring).
 
-**Noise.** Picking up an orb, BOO, and standing still for 10 s ("sneeze") each make a ring on the seeker's view.
+**Lockers.** Runners can hide in a locker for up to 12 s (then it creaks open). They're invisible
+inside. The seeker can search a locker (0.9 s); finding someone catches them on the spot.
 
-**Scoring.** Seeker gets +1 per catch and +3 for a win. Runners get +1 per orb, +2 per rescue, and +3 each for a team win.
+**Item boxes.** Three boxes on the map, respawning after 9 s. Runners get **smoke** (a cloud that
+blocks light), **decoy** (a fake runner that pops when lit) or **flash** (blinds a nearby seeker for
+2.5 s). Seekers get **flare** (lights an area for 6 s) or **trap** (roots a runner for 2.5 s, with a noise).
+
+**Noise.** Banking an orb, BOO, traps, and standing still for 10 s ("sneeze") make a ring on the seeker's view.
+
+**Scoring** (`SCORING`): seeker +1 per catch, +3 for a win; runners +1 per orb, +2 per rescue, +3
+each for a team win. The results screen hands out awards (closest call, orb hoarder, hero, daredevil,
+locker legend, exterminator, eagle eye).
+
+**Balance.** `npx tsx script/sim.ts [rounds] [bots]` plays all-bot rounds headlessly and reports
+win rates and hunt lengths. With the current numbers bots land around 40–70 % seeker wins depending
+on group size, with hunts of about a minute (humans are slower than bots).
 
 ## Architecture
 
 ```
-shared/   config.ts    all tuning constants (speeds, vision, timers, scoring)
-          protocol.ts  wire types (RoomInfo, Snapshot, FxEvent, InputMsg, events)
-          physics.ts   deterministic movement + wall sliding (used by server AND client)
-          geometry.ts  raycasts, line of sight, light polygons, seekerSees()
-          maze.ts      maze generator (backtracker + braiding + plazas, merged walls)
-          rules.ts     ability mapping, frozen rules, movement context
-server/   routes.ts    socket.io wiring, room registry, 30 Hz loop, /api/lan
-          game/room.ts the authoritative game: lobby, rounds, input queue, catching, orbs…
-client/   pages/       Home, Join, TvPage/PlayPage (routing with wouter)
-          lib/net.ts   socket wiring, URL-driven room attachment, snapshot buffer, actions
-          lib/storage.ts  seats, host tokens, recent rooms
-          components/kit.tsx  design system (backdrop, logo, glass panels, neon buttons)
-          game/GameScene.ts  Phaser scene for both TV and phone views
-          game/predictor.ts  client-side prediction + reconciliation
-          game/input.ts      joystick/keyboard state
-          components/game/*  React screens (lobbies, HUDs, overlays, results)
-script/bots.ts           headless bots for solo playtesting
-tests/                   vitest: physics/maze/geometry, room rules, netcode
+shared/    config.ts     tuning constants
+           schema.ts     Colyseus state schema (GameState, Player, Round, Thing…)
+           protocol.ts   join options, client/server messages, fx events, results
+           physics.ts    movement + wall collision (used by phones and server validation)
+           geometry.ts   raycasts, light polygons, line of sight, seekerSees()
+           maze.ts       maze generator (backtracker + braiding + plazas), lockers, cell graph
+           rules.ts      ability mapping, cooldowns, speeds, who is frozen
+server/    index.ts      entry: API + Colyseus on one HTTP server, Vite in dev, static in prod
+           app.ts        createApp(): express routes (/api/lan, /api/rooms/:code) + Colyseus
+           rooms/PartyRoom.ts  Colyseus room: auth, seats, host/watch bindings, reconnection
+           game/Game.ts  all game rules over the schema state, transport-free and unit-tested
+           game/bots.ts  server-side bots (BFS over the cell graph); they play every role
+client/    lib/session.ts   Colyseus client, URL-driven attach/reconnect, clock sync, actions
+           lib/gameStore.ts zustand store with a throttled view of room state for React
+           lib/storage.ts   seats, host tokens, recent rooms, name/face
+           game/Renderer.ts PixiJS renderer for TV and phone views
+           game/Lighting.ts light map: per-light visibility meshes into a blurred render texture
+           game/MazeView.ts, Character.ts, Effects.ts, textures.ts  procedural art and effects
+           game/LocalMover.ts  local player movement (client side) + server corrections
+           game/Interp.ts      interpolation of other players against server time
+           audio/        synthesized SFX bank, Tone.js adaptive music, haptics, settings
+           components/   React UI: kit (design system), lobbies, HUDs, controls, results
+           pages/        Home, Join, TV and Play pages (wouter routes)
+script/    build.ts      production build (Vite client + esbuild server bundle)
+           sim.ts        headless bot balance simulation
+tests/     shared.test.ts  maze, physics, geometry
+           game.test.ts    rules: flow, catching, cages, orbs, items, lockers, seats, bot matches
+           server.test.ts  real Colyseus server over WebSockets: codes, joins, rejoin, eviction, sync
 ```
 
 ### Networking model
-- **Server-authoritative.** Phones send `input` messages (`seq`, joystick vector, ability
-  presses) at 30 Hz. The server applies each input as one fixed physics step. A per-player credit
-  budget (1 per tick, burst 4) stops speed hacks and absorbs jitter.
-- **Client prediction.** The phone applies its own inputs immediately with the same `stepMover`.
-  Each snapshot carries `ack` (the last processed seq); the phone rewinds to the server state and
-  replays the unacked inputs. Physics is deterministic, so corrections are near zero; any that remain fade out visually.
-  `tests/netcode.test.ts` checks this against the real `Room` with simulated latency.
-- **Interpolation.** Other players are drawn ~110 ms in the past, between two buffered snapshots.
-- **Messages.** `room` (lobby state + maze, only when it changes), `snap` (positions etc., every
-  tick, sent as volatile), `fx` (one-off events: polo, noise, caught, freed, orb).
-- **Joining and reconnecting.** See "Screens, URLs and sessions" below.
+- **Colyseus state sync.** The server owns `GameState` and patches it to every client at 30 Hz.
+  One-off events (POLO, noises, catches, orbs, item use…) go out as `fx` messages.
+- **Movement is predicted on the phone.** `LocalMover` moves the player locally every frame with the
+  shared physics and sends its position at 30 Hz. The server checks each move: speed (with slack and
+  ability boosts), wall overlap, and wall crossing between updates. A rejected move snaps the
+  server copy back and sends `correct`, which the phone eases toward. Abilities that change speed
+  (dash, sprint) are predicted too, so there's no input lag on any network.
+- **Interpolation.** Other players are drawn ~110 ms behind server time; the clock is synced with
+  ping/pong (median offset).
+- **Bots** run inside the server tick with the same rules and validation-free movement.
 
 ### Screens, URLs and sessions
-Every screen has its own URL, so browser back/forward, reload and bookmarks behave:
-
 | URL | Screen |
 |---|---|
-| `/` | Home: host, join, and "pick up where you left off" cards for rooms this browser is still part of |
-| `/join/CODE` | Join form (the TV's QR code points here). Offers "Rejoin as X" if this browser already has a seat |
+| `/` | Home: host, join, and "pick up where you left off" cards |
+| `/join/CODE` | Join form (the TV's QR code points here), with name and face picker |
 | `/play/CODE` | A player's phone. Without a saved seat it redirects to `/join/CODE` |
-| `/tv/CODE` | The shared screen. With the host token it controls the room, otherwise it only watches |
+| `/tv/CODE` | The shared screen. With the host token it controls the room, otherwise it watches |
 
-- The **URL decides** which room a tab follows (`client/src/lib/net.ts` → `attachTv` / `attachPlay`).
-  Every socket reconnect re-attaches to it, so Wi-Fi drops and server hiccups recover by themselves.
-- **Seats** (`client/src/lib/storage.ts`) are saved per tab (sessionStorage), with a per-browser copy
-  (localStorage). Two tabs can be two different players, and closing and reopening the browser still rejoins.
-  **Host tokens** are saved per browser.
-- Leaving a room page (back button, Home) only *detaches*: the seat is kept and shows as reconnecting.
-  "Leave room" gives the seat up for good.
-- A player who lost their saved seat (other phone, private mode) can reclaim it by joining with the
-  same name while that seat is disconnected.
-- Opening the same seat or TV somewhere else moves it there. The old tab shows "Playing somewhere else"
-  with a button to take it back.
-- The server **never creates rooms implicitly**. If a room is gone (idle for 10 minutes, or the server
-  restarted), screens say "Room has ended" and offer to start a new one.
-- Grace periods: a player disconnected in the lobby is dropped after 20 s. A seeker gone for 25 s cancels the round.
+- The URL decides which room a tab is attached to. Colyseus reconnection (40 s window) handles
+  network drops; after that the client re-joins with its seat token.
+- Seats are saved per tab (sessionStorage) with a per-browser copy (localStorage). Host tokens are
+  per browser. A player who lost their token can reclaim a disconnected seat by joining with the same name.
+- Opening the same seat or TV somewhere else moves it there; the old tab says so and can take it back.
+- Leaving a page only detaches (the seat shows as reconnecting). "Leave room" gives the seat up.
+- Rooms are never created implicitly. A room idle for 10 minutes is disposed and screens say it ended.
+- Grace periods: a player disconnected in the lobby is dropped after 20 s; a seeker gone for 30 s
+  cancels the round.
 
-**Hosting note:** rooms live in the server's memory. Deploy to a single always-on instance
-(Replit: Reserved VM, or Autoscale with max instances = 1). Multiple instances, or scale-to-zero,
-make players land on a server that doesn't know their room.
+### Rendering
+PixiJS (WebGL). The world (floor, walls, lockers, characters, items) is drawn with procedurally
+generated textures. A **light map** is rendered each frame: every light (seeker cone + aura, runner
+light, orbs, flares, item boxes) is a triangle fan built from its visibility polygon, so walls cast
+real shadows, textured with a radial falloff, blurred, and multiplied over the world. The same map
+is added on top at low alpha so beams glow. Above the darkness: remembered wall outlines, orb and
+item glows, cages, labels and effects.
 
-### Visibility
-The server decides who is lit (`SnapPlayer.lit`) using the same `seekerSees()` the client uses for drawing.
-- **TV / seeker phone:** fog with the cone + aura cut out. Walls the light touches are remembered in grey (map memory). Runners are drawn only when lit.
-- **Runner phone:** a small light circle blocked by walls. The whole maze stays as a grey outline because they saw it during scatter. Others are visible only inside your light.
-- **Ghost phone:** no fog.
-- **Everyone:** orbs and cages are always visible.
+Who sees what:
+- **TV / seeker phone:** black except the seeker's light, orbs, flares and item boxes. Walls the light
+  touches are remembered as outlines. Runners appear only when lit.
+- **Runner phone:** a small light around you, plus the maze outline (you saw it during scatter).
+- **Ghost phone:** dim but fully visible.
+
+### Audio
+- **SFX** are synthesized into AudioBuffers on first use (no audio files).
+- **Music** is generated live with Tone.js, loaded on the first tap: a synthwave lobby loop, a
+  tension bed for reveal/scatter, and a hunt track whose layers follow time and danger, faster
+  in the last 30 s. The TV plays music by default; phones only if turned on.
+- Runner phones add a heartbeat that speeds up as the seeker gets close, a rising whine while
+  exposed, orb charging blips, and vibration on Android.
 
 ## Running
 ```
 npm install
-npm run dev          # http://localhost:5000: host on the TV, phones join via QR / room code
-npm run bots -- ABCD 3   # add 3 bots to room ABCD
-npm test             # vitest
-npm run check        # typecheck
+npm run dev              # http://localhost:5000 (PORT env overrides)
+npm test                 # vitest: unit + real-server integration
+npm run check            # typecheck
+npx tsx script/sim.ts    # bot balance simulation
 npm run build && npm start
 ```
+
+**Hosting.** Rooms live in the server's memory, so run exactly one always-on instance (Replit:
+Reserved VM, or Autoscale with max instances = 1; scale-to-zero ends rooms when idle).
+WebSockets and HTTP share one port. Requires Node 22+.

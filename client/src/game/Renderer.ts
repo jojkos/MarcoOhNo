@@ -74,6 +74,8 @@ export class GameRenderer {
   private cam = { x: 0, y: 0, zoom: 1, ready: false };
   private punch: { x: number; y: number; t: number } | null = null;
   private time = 0;
+  /** Adaptive quality: slow devices drop to 1x resolution. */
+  private perf = { frames: 0, slow: 0, checkAt: 0 };
   private unsubs: (() => void)[] = [];
   private boundRoom: Room<GameState> | null = null;
 
@@ -184,8 +186,23 @@ export class GameRenderer {
 
   // ------------------------------------------------------------------ frame
 
+  private adaptQuality(dt: number) {
+    const p = this.perf;
+    p.frames++;
+    if (dt > 1 / 40) p.slow++;
+    if (this.time < p.checkAt) return;
+    p.checkAt = this.time + 3;
+    const r = this.app.renderer;
+    if (p.frames > 30 && p.slow / p.frames > 0.5 && r.resolution > 1) {
+      r.resize(this.app.screen.width, this.app.screen.height, 1);
+    }
+    p.frames = 0;
+    p.slow = 0;
+  }
+
   private frame(dt: number) {
     this.time += dt;
+    this.adaptQuality(dt);
     const W = this.app.screen.width;
     const H = this.app.screen.height;
     const s = getRoom()?.state;

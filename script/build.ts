@@ -56,6 +56,8 @@ async function buildAll() {
       "process.env.NODE_ENV": '"production"',
     },
     minify: true,
+    // Colyseus finds the express app by its function name ("app"); keep it.
+    keepNames: true,
     external: externals,
     logLevel: "info",
   });

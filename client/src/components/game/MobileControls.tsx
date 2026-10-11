@@ -39,7 +39,10 @@ const ACT_UI: Record<"hide" | "leave" | "search", Look> = {
 /** Floating joystick: touch anywhere on the left part of the screen. */
 function Joystick() {
   const [base, setBase] = useState<{ x: number; y: number } | null>(null);
-  const [knob, setKnob] = useState({ x: 0, y: 0 });
+  const origin = useRef<{ x: number; y: number } | null>(null);
+  // The knob moves via style, not React state: no re-render per touch move.
+  const knob = useRef<HTMLDivElement>(null);
+  const knobAt = useRef({ x: 0, y: 0 });
   const pointer = useRef<number | null>(null);
 
   const update = (clientX: number, clientY: number, origin: { x: number; y: number }) => {
@@ -50,7 +53,8 @@ function Joystick() {
       dx = (dx / len) * JOY_RADIUS;
       dy = (dy / len) * JOY_RADIUS;
     }
-    setKnob({ x: dx, y: dy });
+    knobAt.current = { x: dx, y: dy };
+    if (knob.current) knob.current.style.transform = `translate(${dx}px, ${dy}px)`;
     const mag = Math.min(1, len / JOY_RADIUS);
     if (mag < DEADZONE) {
       input.joyX = 0;
@@ -65,8 +69,9 @@ function Joystick() {
 
   const end = () => {
     pointer.current = null;
+    origin.current = null;
     setBase(null);
-    setKnob({ x: 0, y: 0 });
+    knobAt.current = { x: 0, y: 0 };
     input.joyX = 0;
     input.joyY = 0;
   };
@@ -78,13 +83,14 @@ function Joystick() {
         if (pointer.current !== null) return;
         pointer.current = e.pointerId;
         e.currentTarget.setPointerCapture(e.pointerId);
-        const origin = { x: e.clientX, y: e.clientY };
-        setBase(origin);
-        update(e.clientX, e.clientY, origin);
+        const o = { x: e.clientX, y: e.clientY };
+        origin.current = o;
+        setBase(o);
+        update(e.clientX, e.clientY, o);
       }}
       onPointerMove={(e) => {
-        if (e.pointerId !== pointer.current || !base) return;
-        update(e.clientX, e.clientY, base);
+        if (e.pointerId !== pointer.current || !origin.current) return;
+        update(e.clientX, e.clientY, origin.current);
       }}
       onPointerUp={(e) => e.pointerId === pointer.current && end()}
       onPointerCancel={(e) => e.pointerId === pointer.current && end()}
@@ -97,7 +103,8 @@ function Joystick() {
         >
           <div
             className="absolute h-14 w-14 rounded-full bg-[radial-gradient(circle_at_35%_30%,#ffffff,#9fe9ff)] shadow-[0_0_24px_2px_hsl(var(--primary)/0.7)]"
-            style={{ left: JOY_RADIUS - 28 + knob.x, top: JOY_RADIUS - 28 + knob.y }}
+            ref={knob}
+            style={{ left: JOY_RADIUS - 28, top: JOY_RADIUS - 28, transform: `translate(${knobAt.current.x}px, ${knobAt.current.y}px)` }}
           />
         </div>
       ) : (

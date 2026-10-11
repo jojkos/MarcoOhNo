@@ -10,10 +10,23 @@ export function serveStatic(app: Express) {
     );
   }
 
-  app.use(express.static(distPath));
+  // Hashed bundles never change, so cache them hard; index.html must stay fresh.
+  app.use(
+    express.static(distPath, {
+      setHeaders(res, file) {
+        res.setHeader("Cache-Control", file.includes(`${path.sep}assets${path.sep}`) ? "public, max-age=31536000, immutable" : "no-cache");
+      },
+    }),
+  );
 
-  // fall through to index.html if the file doesn't exist
+  // A missing bundle is a real 404 (e.g. a stale tab after a deploy), not the app shell.
+  app.use("/assets", (_req, res) => {
+    res.status(404).end();
+  });
+
+  // Client-side routes fall through to index.html.
   app.use("*", (_req, res) => {
+    res.setHeader("Cache-Control", "no-cache");
     res.sendFile(path.resolve(distPath, "index.html"));
   });
 }

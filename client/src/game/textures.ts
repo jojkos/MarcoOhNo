@@ -31,9 +31,9 @@ function build() {
   // Light falloff: bright core, long soft tail. Sampled by light meshes via UVs.
   const light = radial(256, [
     [0, 1],
-    [0.25, 0.85],
-    [0.55, 0.45],
-    [0.8, 0.14],
+    [0.35, 0.95],
+    [0.65, 0.7],
+    [0.85, 0.32],
     [1, 0],
   ]);
   const glow = radial(128, [
@@ -78,26 +78,50 @@ function build() {
     return Texture.from(c);
   })();
 
-  // Floor tile: dark concrete with faint panel seams and grime.
+  // Floor tile: worn concrete panels with seams, grime and painted guide lines.
+  // Authored fairly bright: the light map multiplies it down to black.
   const floor = (() => {
     const S = 240;
     const [c, g] = canvas(S);
     const r = rng(7);
-    g.fillStyle = "#0b1020";
+    g.fillStyle = "#3a4466";
     g.fillRect(0, 0, S, S);
-    for (let i = 0; i < 2200; i++) {
-      const v = Math.floor(r() * 26);
-      g.fillStyle = `rgba(${40 + v},${55 + v},${90 + v},${0.05 + r() * 0.06})`;
+    // Panels with slightly varied tone.
+    for (let y = 0; y < 2; y++)
+      for (let x = 0; x < 2; x++) {
+        const v = Math.floor(r() * 14) - 7;
+        g.fillStyle = `rgb(${58 + v},${68 + v},${102 + v})`;
+        g.fillRect(x * 120 + 2, y * 120 + 2, 116, 116);
+      }
+    for (let i = 0; i < 3200; i++) {
+      const v = Math.floor(r() * 40);
+      g.fillStyle = r() < 0.5 ? `rgba(${90 + v},${105 + v},${150 + v},${0.08 + r() * 0.1})` : `rgba(10,14,28,${0.08 + r() * 0.12})`;
       g.fillRect(r() * S, r() * S, 1 + r() * 2, 1 + r() * 2);
     }
-    for (let i = 0; i < 14; i++) {
-      g.fillStyle = `rgba(0,0,0,${0.08 + r() * 0.1})`;
+    for (let i = 0; i < 16; i++) {
+      g.fillStyle = `rgba(8,10,20,${0.08 + r() * 0.12})`;
       g.beginPath();
-      g.ellipse(r() * S, r() * S, 10 + r() * 30, 6 + r() * 20, r() * 3, 0, Math.PI * 2);
+      g.ellipse(r() * S, r() * S, 10 + r() * 34, 6 + r() * 22, r() * 3, 0, Math.PI * 2);
       g.fill();
     }
-    g.strokeStyle = "rgba(90,130,220,0.12)";
-    g.lineWidth = 2;
+    // Cracks.
+    g.strokeStyle = "rgba(10,12,24,0.45)";
+    g.lineWidth = 1;
+    for (let i = 0; i < 5; i++) {
+      let x = r() * S;
+      let y = r() * S;
+      g.beginPath();
+      g.moveTo(x, y);
+      for (let k = 0; k < 5; k++) {
+        x += (r() - 0.5) * 26;
+        y += (r() - 0.5) * 26;
+        g.lineTo(x, y);
+      }
+      g.stroke();
+    }
+    // Seams.
+    g.strokeStyle = "rgba(12,16,32,0.9)";
+    g.lineWidth = 3;
     for (const p of [0, S / 2]) {
       g.beginPath();
       g.moveTo(p + 1, 0);
@@ -106,6 +130,9 @@ function build() {
       g.lineTo(S, p + 1);
       g.stroke();
     }
+    // Bolts at panel corners.
+    g.fillStyle = "rgba(160,180,230,0.35)";
+    for (const x of [8, 112, 128, 232]) for (const y of [8, 112, 128, 232]) g.fillRect(x - 1.5, y - 1.5, 3, 3);
     return Texture.from(c);
   })();
 

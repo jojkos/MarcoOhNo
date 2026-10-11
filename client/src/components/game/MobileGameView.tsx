@@ -157,7 +157,7 @@ export function MobileGameView() {
           {phase === "scatter" && !isSeeker && (
             <Banner tone="info">
               <p className="font-display text-lg font-bold uppercase">Hide! Lights out in {Math.ceil(view.phaseLeft / 1000)}</p>
-              <p className="text-sm text-muted-foreground">Glowing dots are orbs, blue cabinets are lockers you can hide in.</p>
+              <p className="text-sm text-muted-foreground">Stand on a glowing orb to charge it. Blue cabinets are lockers you can hide in.</p>
             </Banner>
           )}
           {hunt && me.status === "caged" && (
@@ -166,7 +166,7 @@ export function MobileGameView() {
                 <Lock className="h-5 w-5" /> Caged
               </p>
               <p className="text-sm text-muted-foreground">
-                Press HELP! A teammate standing next to you frees you{me.rescue > 0 ? ` (${Math.round(me.rescue * 100)}%)` : ""}. Another catch makes you a ghost.
+                Press HELP! A teammate next to you frees you fast; alone you slowly pick the lock{me.rescue > 0 ? ` (${Math.round(me.rescue * 100)}%)` : ""}. Another catch makes you a ghost.
               </p>
             </Banner>
           )}

@@ -38,8 +38,8 @@ export function RoleReveal({ role, seekerName, orbs }: { role: Role; seekerName:
         </h1>
         <p className="mt-5 text-lg leading-relaxed text-foreground/80 animate-rise-in [animation-delay:160ms]">
           {seeker
-            ? `Count to 10 while they hide. Then catch them all, or stop them grabbing ${orbs} orbs before time runs out.`
-            : `${seekerName} is hunting. Scatter while the lights are on, then grab ${orbs} orbs as a team.`}
+            ? `Count to 10 while they hide. Then catch them all, or stop them charging ${orbs} orbs (they glow brighter while charging) before time runs out.`
+            : `${seekerName} is hunting. Scatter while the lights are on, then charge ${orbs} orbs as a team: stand on one until it pops.`}
         </p>
       </div>
     </div>

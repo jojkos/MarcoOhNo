@@ -128,7 +128,7 @@ describe("catching, cages, ghosts", () => {
     const [a, b] = runners;
     place(seeker, 100, 100, 0);
     place(a, 220, 100);
-    ticks(RULES.exposureFillSec * 1000 + 150);
+    ticks(RULES.exposureFillFor(2) * 1000 + 150);
     expect(a.status).toBe("caged");
     expect(fx.some((e) => e.k === "caught" && e.id === a.id)).toBe(true);
     place(seeker, 100, 100, Math.PI);
@@ -144,7 +144,7 @@ describe("catching, cages, ghosts", () => {
     place(seeker, 100, 100, 0);
     place(a, 220, 100);
     ticks(600);
-    expect(a.exposure).toBeGreaterThan(0.25);
+    expect(a.exposure).toBeGreaterThan(0.2);
     const smoke = new Thing();
     Object.assign(smoke, { id: 99, x: 170, y: 100, ttl: 5000 });
     game.state.smokes.push(smoke);
@@ -158,7 +158,7 @@ describe("catching, cages, ghosts", () => {
     (game.privOf(a.id) as any).timesCaught = 1;
     place(seeker, 100, 100, 0);
     place(a, 220, 100);
-    ticks(RULES.exposureFillSec * 1000 + 150);
+    ticks(RULES.exposureFillFor(1) * 1000 + 150);
     expect(a.status).toBe("ghost");
     expect(game.phase).toBe("round_over");
     expect(result(game).winner).toBe("seeker");
@@ -173,18 +173,45 @@ describe("catching, cages, ghosts", () => {
 });
 
 describe("orbs and items", () => {
-  it("runners win by collecting enough orbs", () => {
+  it("orbs charge while you stand on them; enough orbs wins", () => {
     const { game, runners, ticks } = hunt(2);
     const [a] = runners;
     const need = game.state.round!.orbsToWin;
-    for (let i = 0; i < need; i++) {
+    const drop = (id: number) => {
       game.state.orbs.splice(0, game.state.orbs.length);
       const orb = new Thing();
-      Object.assign(orb, { id: 500 + i, x: a.x, y: a.y });
+      Object.assign(orb, { id, x: a.x, y: a.y });
       game.state.orbs.push(orb);
-      ticks(DT);
+      return orb;
+    };
+    // Stepping off early loses the charge.
+    const first = drop(400);
+    ticks(RULES.orbChargeSec * 500);
+    expect(first.charge).toBeGreaterThan(30);
+    expect(game.state.collected).toBe(0);
+    place(a, a.x + 200, a.y);
+    ticks(RULES.orbChargeDecaySec * 1000 + 100);
+    expect(first.charge).toBe(0);
+    place(a, first.x, first.y);
+    for (let i = 0; i < need; i++) {
+      drop(500 + i);
+      ticks(RULES.orbChargeSec * 1000 + 2 * DT);
     }
     expect(result(game).winner).toBe("runners");
+  });
+
+  it("a lone caged runner picks the lock eventually", () => {
+    const { game, seeker, runners, ticks } = hunt(3);
+    const [a] = runners;
+    place(seeker, 100, 100, 0);
+    place(a, 220, 100);
+    ticks(RULES.exposureFillFor(2) * 1000 + 150);
+    expect(a.status).toBe("caged");
+    place(seeker, 100, 100, Math.PI);
+    ticks(RULES.lockpickSec * 1000 - 1000);
+    expect(a.status).toBe("caged");
+    ticks(1500);
+    expect(a.status).toBe("free");
   });
 
   it("picking up a box gives a role item; flashbang blinds a nearby seeker", () => {

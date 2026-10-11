@@ -120,6 +120,7 @@ const BANK: Record<string, Layer[]> = {
     { shape: "noise", freq: 0, dur: 0.05, vol: 0.25, lowpass: 3000 },
     { shape: "saw", freq: 600, to: 260, dur: 0.22, delay: 0.06, vol: 0.18, lowpass: 2500, grit: 0.4 },
   ],
+  charge: [{ shape: "tri", freq: 660, to: 760, dur: 0.06, vol: 0.18, release: 0.04 }],
   orb: [{ shape: "sine", freq: 880, dur: 0.32, steps: [0, 4, 7, 12], vol: 0.3, release: 0.25 }],
   item: [{ shape: "tri", freq: 660, to: 1760, dur: 0.25, vol: 0.25, vibrato: [18, 0.02] }],
   dash: [{ shape: "noise", freq: 0, dur: 0.18, vol: 0.35, lowpass: 1800, release: 0.12 }],

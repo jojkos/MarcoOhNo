@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { RULES } from "@shared/config";
+import { PLAYER, RULES } from "@shared/config";
 import type { FxEvent } from "@shared/protocol";
 import { getRoom, onFx } from "@/lib/session";
 import { useGameStore } from "@/lib/gameStore";
@@ -120,6 +120,7 @@ export function useGameAudio(view: View) {
     let lastPhase = "";
     let lastSecond = -1;
     let lastBeat = 0;
+    let lastCharge = 0;
     const id = setInterval(() => {
       const s = getRoom()?.state;
       if (!s) return setMusic(view === "tv" ? "lobby" : "off");
@@ -164,6 +165,16 @@ export function useGameAudio(view: View) {
       // Personal tension on runner phones: heartbeat + exposure whine.
       if (view === "mobile" && me && me.role === "runner" && me.status === "free" && phase === "hunt" && me.locker < 0) {
         exposureTone(me.exposure);
+        // Rising blips while you charge an orb.
+        let charging = -1;
+        s.orbs.forEach((o) => {
+          if (o.charge > 0 && Math.hypot(o.x - me.x, o.y - me.y) <= RULES.orbRadius + PLAYER.radius + 4) charging = o.charge / 100;
+        });
+        if (charging >= 0 && performance.now() - lastCharge > 180 - charging * 80) {
+          lastCharge = performance.now();
+          playSfx("charge", { rate: 0.8 + charging * 0.9 });
+          haptic.tap();
+        }
         const seeker = s.round ? s.players.get(s.round.seekerId) : undefined;
         if (seeker) {
           const d = Math.hypot(seeker.x - me.x, seeker.y - me.y);

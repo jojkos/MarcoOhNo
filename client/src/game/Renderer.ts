@@ -61,7 +61,7 @@ export class GameRenderer {
 
   private chars = new Map<string, Character>();
   private decoys = new Map<number, Character>();
-  private orbs = new Map<number, { core: Sprite; glow: Sprite; t: number }>();
+  private orbs = new Map<number, { core: Sprite; glow: Sprite; ring: Graphics; t: number; charge: number }>();
   private items = new Map<number, Container>();
   private smokes = new Map<number, Container>();
   private flares = new Map<number, Container>();
@@ -98,7 +98,7 @@ export class GameRenderer {
 
     this.world.addChild(this.floorLayer, this.decalLayer, this.wallLayer, this.entityLayer);
     this.overlay.addChild(this.memoryLayer, this.glowLayer, this.lockerMarks, this.cageLayer, this.labelLayer, this.effects.layer);
-    this.app.stage.addChild(this.world, this.lighting.sprite, this.overlay, this.effects.screen);
+    this.app.stage.addChild(this.world, this.lighting.sprite, this.lighting.haze, this.overlay, this.effects.screen);
     this.glowLayer.blendMode = "add";
 
     this.unsubs.push(onFx((events) => this.handleFx(events)));
@@ -107,6 +107,7 @@ export class GameRenderer {
     this.bindRoom(getRoom());
     this.app.ticker.add((t) => this.frame(Math.min(0.1, t.deltaMS / 1000)));
     this.ready = true;
+    if (import.meta.env.DEV) (window as any).__renderer = this;
   }
 
   destroy() {
@@ -192,6 +193,7 @@ export class GameRenderer {
     if (!s || !round || s.phase === "lobby") {
       this.lighting.resize(W, H);
       this.lighting.ambient = 0x000000;
+      this.lighting.haze.visible = false;
       this.lighting.begin();
       this.lighting.end(0, 0, 1);
       return;
@@ -331,6 +333,9 @@ export class GameRenderer {
       layer.position.set(-left * z + ox, -top * z + oy);
     }
     this.lighting.sprite.position.set(ox, oy);
+    this.lighting.haze.position.set(ox, oy);
+    // Haze only where it reads as light in the dark, not over a lit lobby.
+    this.lighting.haze.visible = !bright;
     this.lighting.end(left, top, z);
   }
 
@@ -421,24 +426,38 @@ export class GameRenderer {
         const glow = new Sprite(tex.glow);
         glow.anchor.set(0.5);
         glow.tint = 0xffc21a;
+        const ring = new Graphics();
         this.entityLayer.addChild(core);
         this.glowLayer.addChild(glow);
-        e = { core, glow, t: Math.random() * 6 };
+        this.labelLayer.addChild(ring);
+        e = { core, glow, ring, t: Math.random() * 6, charge: 0 };
         this.orbs.set(o.id, e);
         this.effects.burst(o.x, o.y, { count: 14, color: 0xffd23f, speed: 120, life: 0.6, size: 10, texture: tex.spark });
       }
-      e.t += dt;
-      const pulse = 1 + Math.sin(e.t * 3) * 0.12;
-      e.core.position.set(o.x, o.y - 4 + Math.sin(e.t * 2) * 3);
+      // Charging: spins faster, flares brighter, and a ring fills up.
+      const charge = o.charge / 100;
+      e.charge += (charge - e.charge) * Math.min(1, dt * 12);
+      e.t += dt * (1 + e.charge * 5);
+      const pulse = 1 + Math.sin(e.t * 3) * 0.12 + e.charge * 0.5;
+      e.core.position.set(o.x, o.y - 4 + Math.sin(e.t * 2) * 3 * (1 - e.charge));
+      e.core.width = e.core.height = 22 + e.charge * 10;
       e.glow.position.copyFrom(e.core.position);
       e.glow.width = e.glow.height = 64 * pulse;
       e.glow.alpha = 0.85;
+      e.ring.clear();
+      if (e.charge > 0.02) {
+        e.ring.position.set(o.x, o.y);
+        e.ring.circle(0, 0, 30).stroke({ width: 4, color: 0x000000, alpha: 0.4 });
+        e.ring.arc(0, 0, 30, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * e.charge).stroke({ width: 4, color: 0xffe27a, cap: "round" });
+        if (Math.random() < dt * 30 * e.charge) this.effects.burst(o.x, o.y, { count: 1, color: 0xffe27a, speed: 90, life: 0.4, size: 6, texture: tex.spark });
+      }
       if (Math.random() < dt * 2) this.effects.burst(o.x, o.y - 6, { count: 1, color: 0xffe27a, speed: 25, life: 0.9, size: 5, texture: tex.spark, dir: -Math.PI / 2, spread: 1.2 });
     });
     for (const [id, e] of this.orbs) {
       if (!orbIds.has(id)) {
         e.core.destroy();
         e.glow.destroy();
+        e.ring.destroy();
         this.orbs.delete(id);
       }
     }

@@ -72,6 +72,8 @@ export const Thing = schema(
     /** Remaining lifetime in ms (0 = permanent). */
     ttl: t.uint16().default(0),
     owner: t.string().default(""),
+    /** Orbs: charge progress 0..100 while a runner stands on it. */
+    charge: t.uint8().default(0),
   },
   "Thing",
 );

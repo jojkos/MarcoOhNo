@@ -92,6 +92,8 @@ export class Game {
   private decoyExposure = new Map<number, number>();
   private poloLeft = 0;
   private huntElapsed = 0;
+  private orbCharge = new Map<number, number>();
+  private orbTimers: number[] = [];
   /** Recent noises/pings, for bots to "hear". */
   readonly heard: { x: number; y: number; at: number }[] = [];
 
@@ -340,6 +342,8 @@ export class Game {
     this.itemRespawn = [];
     this.poloLeft = 0;
     this.huntElapsed = 0;
+    this.orbCharge.clear();
+    this.orbTimers = [];
     this.heard.length = 0;
     this.pending = [];
     this.fillOrbs();
@@ -758,6 +762,7 @@ export class Game {
       } else this.lockerCooldown.set(id, left);
     }
 
+    const onOrb = new Map<number, Player[]>();
     for (const r of runners) {
       const pr = this.priv.get(r.id)!;
       pr.invulnMs = Math.max(0, pr.invulnMs - dtMs);
@@ -778,7 +783,7 @@ export class Game {
       const inFlare = !inBeam && s.flares.some((f) => dist(f, r) <= VISION.flareLight && !blocked(f, r, occ));
       r.lit = inBeam || inFlare;
       if (r.lit && !r.invuln) {
-        r.exposure += (dt / RULES.exposureFillSec) * (inBeam ? 1 : RULES.flareExposureScale);
+        r.exposure += (dt / RULES.exposureFillFor(runners.length)) * (inBeam ? 1 : RULES.flareExposureScale);
         pr.stats.peak = Math.max(pr.stats.peak, r.exposure);
         if (r.exposure >= 1) {
           this.catchRunner(r, seeker!);
@@ -793,17 +798,15 @@ export class Game {
       }
       if (seeker && dist(seeker, r) < 160) pr.stats.nearSeekerMs += dtMs;
 
-      // Orbs
-      for (let i = 0; i < s.orbs.length; i++) {
-        const orb = s.orbs[i];
-        if (dist(orb, r) <= RULES.orbRadius + PLAYER.radius) {
-          s.orbs.splice(i, 1);
-          s.collected++;
-          pr.stats.orbs++;
-          this.pending.push({ k: "orb", x: orb.x, y: orb.y, by: r.id });
-          this.heard.push({ x: orb.x, y: orb.y, at: now });
-          this.fillOrbs();
-          break;
+      // Orbs: standing on one charges it.
+      if (r.locker < 0 && !r.rooted) {
+        for (const orb of s.orbs) {
+          if (dist(orb, r) <= RULES.orbRadius + PLAYER.radius) {
+            const on = onOrb.get(orb.id);
+            if (on) on.push(r);
+            else onOrb.set(orb.id, [r]);
+            break;
+          }
         }
       }
 
@@ -834,6 +837,31 @@ export class Game {
       }
     }
 
+    // Orb charging: more runners on one orb charge it faster.
+    for (let i = s.orbs.length - 1; i >= 0; i--) {
+      const orb = s.orbs[i];
+      const on = onOrb.get(orb.id);
+      let c = this.orbCharge.get(orb.id) ?? 0;
+      c = on ? c + (dt / RULES.orbChargeSec) * (1 + 0.5 * (on.length - 1)) : Math.max(0, c - dt / RULES.orbChargeDecaySec);
+      if (on && c >= 1) {
+        s.orbs.splice(i, 1);
+        this.orbCharge.delete(orb.id);
+        s.collected++;
+        for (const r of on) this.priv.get(r.id)!.stats.orbs++;
+        this.pending.push({ k: "orb", x: orb.x, y: orb.y, by: on[0].id });
+        this.heard.push({ x: orb.x, y: orb.y, at: now });
+        this.orbTimers.push(RULES.orbRespawnMs);
+        continue;
+      }
+      this.orbCharge.set(orb.id, c);
+      orb.charge = Math.round(c * 100);
+    }
+    this.orbTimers = this.orbTimers.map((t) => t - dtMs);
+    if (this.orbTimers.some((t) => t <= 0)) {
+      this.orbTimers = this.orbTimers.filter((t) => t > 0);
+      this.fillOrbs();
+    }
+
     // Item boxes (anyone in the round can grab one if their hands are free)
     for (const p of this.players) {
       if (!p.inRound || p.item || p.locker >= 0) continue;
@@ -857,22 +885,19 @@ export class Game {
       const rescuer = runners.find(
         (r) => r.status === "free" && r.locker < 0 && r !== caged && dist(r, caged) <= RULES.rescueRadius,
       );
-      if (rescuer) {
-        caged.rescue += dt / RULES.rescueSec;
-        if (caged.rescue >= 1) {
-          const pr = this.priv.get(caged.id)!;
-          caged.status = "free";
-          caged.rescue = 0;
-          caged.exposure = 0;
-          pr.invulnMs = RULES.rescueInvulnMs;
-          caged.invuln = true;
-          pr.idleAnchor = { x: caged.x, y: caged.y };
-          pr.idleMs = 0;
-          this.priv.get(rescuer.id)!.stats.rescues++;
-          this.pending.push({ k: "freed", id: caged.id, by: rescuer.id, x: caged.x, y: caged.y });
-        }
-      } else {
-        caged.rescue = Math.max(0, caged.rescue - dt / RULES.rescueDecaySec);
+      // A teammate frees you in seconds; alone you slowly pick the lock.
+      caged.rescue += dt / (rescuer ? RULES.rescueSec : RULES.lockpickSec);
+      if (caged.rescue >= 1) {
+        const pr = this.priv.get(caged.id)!;
+        caged.status = "free";
+        caged.rescue = 0;
+        caged.exposure = 0;
+        pr.invulnMs = RULES.rescueInvulnMs;
+        caged.invuln = true;
+        pr.idleAnchor = { x: caged.x, y: caged.y };
+        pr.idleMs = 0;
+        if (rescuer) this.priv.get(rescuer.id)!.stats.rescues++;
+        this.pending.push({ k: "freed", id: caged.id, by: rescuer?.id ?? caged.id, x: caged.x, y: caged.y });
       }
     }
 
@@ -957,7 +982,7 @@ export class Game {
   private fillOrbs() {
     const s = this.state;
     const round = s.round!;
-    const want = Math.min(RULES.activeOrbs(this.runners.length), round.orbsToWin - s.collected);
+    const want = Math.min(RULES.activeOrbs(this.runners.length), round.orbsToWin - s.collected) - this.orbTimers.length;
     while (s.orbs.length < want) {
       const p = this.freeSpot(250, [...s.orbs, ...s.items]);
       if (!p) break;

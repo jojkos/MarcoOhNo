@@ -50,17 +50,22 @@ export const RULES = {
   huntMs: 150000,
 
   exposureFillSec: 1.5, // continuous light needed for a catch
+  /** Small groups get a little more slack, so two runners aren't swept in seconds. */
+  exposureFillFor: (runners: number) => 1.5 + 0.4 * Math.max(0, 4 - runners),
   exposureDecaySec: 0.6,
   flareExposureScale: 0.5, // flares expose at half speed
 
   rescueRadius: 48,
   rescueSec: 2.2,
-  rescueDecaySec: 3,
+  lockpickSec: 30, // alone in a cage, you break out eventually
   rescueInvulnMs: 3000,
 
   orbRadius: 26,
-  orbsToWin: (runners: number) => 2 + runners * 2,
-  activeOrbs: (runners: number) => Math.min(5, runners + 2),
+  orbsToWin: (runners: number) => 3 + runners * 2,
+  activeOrbs: (runners: number) => Math.min(3, 1 + Math.ceil(runners / 2)),
+  orbChargeSec: 2, // stand on an orb this long to bank it
+  orbChargeDecaySec: 2,
+  orbRespawnMs: 5000,
 
   sneezeIdleMs: 10000,
   sneezeMoveThreshold: 28,

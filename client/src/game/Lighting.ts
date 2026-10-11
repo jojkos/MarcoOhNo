@@ -37,7 +37,7 @@ class LightMesh {
     return idx;
   }
 
-  set(center: Vec, rim: readonly Vec[], radius: number, color: number, alpha: number) {
+  set(center: Vec, rim: readonly Vec[], radius: number, color: number, alpha: number, bleed: number) {
     const pos = this.positions;
     const uv = this.uvs;
     const inv = 1 / (2 * radius);
@@ -48,10 +48,21 @@ class LightMesh {
     // Unused slots repeat the last rim point (degenerate triangles).
     for (let i = 0; i < this.capacity - 1; i++) {
       const p = rim[Math.min(i, rim.length - 1)];
-      pos[(i + 1) * 2] = p.x;
-      pos[(i + 1) * 2 + 1] = p.y;
-      uv[(i + 1) * 2] = 0.5 + (p.x - center.x) * inv;
-      uv[(i + 1) * 2 + 1] = 0.5 + (p.y - center.y) * inv;
+      let x = p.x;
+      let y = p.y;
+      // Rays that stopped on a wall push a little into it so the wall top lights up.
+      const dx = x - center.x;
+      const dy = y - center.y;
+      const d = Math.hypot(dx, dy);
+      if (bleed > 0 && d > 1 && d < radius - 2) {
+        const k = Math.min(bleed, radius - d) / d;
+        x += dx * k;
+        y += dy * k;
+      }
+      pos[(i + 1) * 2] = x;
+      pos[(i + 1) * 2 + 1] = y;
+      uv[(i + 1) * 2] = 0.5 + (x - center.x) * inv;
+      uv[(i + 1) * 2 + 1] = 0.5 + (y - center.y) * inv;
     }
     this.mesh.geometry.positions = pos;
     this.mesh.geometry.uvs = uv;
@@ -71,6 +82,8 @@ export interface LightSpec {
   alpha: number;
   /** Full circle (true) or cone (false). */
   closed: boolean;
+  /** How far light spills into the walls it hits (px). */
+  bleed?: number;
 }
 
 /**
@@ -79,6 +92,8 @@ export interface LightSpec {
  */
 export class Lighting {
   readonly sprite: Sprite;
+  /** The same light map added on top at low alpha: beams glow in the haze. */
+  readonly haze: Sprite;
   private rt: RenderTexture;
   private layer = new Container();
   private meshes = new Map<string, LightMesh>();
@@ -93,6 +108,9 @@ export class Lighting {
     this.rt = RenderTexture.create({ width: 16, height: 16 });
     this.sprite = new Sprite(this.rt);
     this.sprite.blendMode = "multiply";
+    this.haze = new Sprite(this.rt);
+    this.haze.blendMode = "add";
+    this.haze.alpha = 0.22;
     this.blur = new BlurFilter({ strength: 6, quality: 2 });
     this.layer.filters = [this.blur];
   }
@@ -102,6 +120,7 @@ export class Lighting {
     const rh = Math.max(16, Math.ceil(h * this.resolution));
     this.rt.resize(rw, rh);
     this.sprite.scale.set(1 / this.resolution);
+    this.haze.scale.set(1 / this.resolution);
   }
 
   begin() {
@@ -118,7 +137,7 @@ export class Lighting {
       this.meshes.set(spec.key, m);
       this.layer.addChild(m.mesh);
     }
-    m.set(spec.center, spec.rim, spec.radius, spec.color, spec.alpha);
+    m.set(spec.center, spec.rim, spec.radius, spec.color, spec.alpha, spec.bleed ?? 18);
     this.used.add(spec.key);
   }
 
@@ -138,5 +157,6 @@ export class Lighting {
     this.layer.destroy({ children: true });
     this.rt.destroy(true);
     this.sprite.destroy();
+    this.haze.destroy();
   }
 }

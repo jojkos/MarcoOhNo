@@ -63,7 +63,7 @@ export function TVGameView() {
           <p className="animate-rise-in font-display text-8xl font-bold text-neon-red glow-text-red [animation-delay:100ms]">{seeker?.name ?? "?"}</p>
           <p className="mt-2 animate-rise-in font-display text-3xl font-bold uppercase tracking-[0.3em] [animation-delay:180ms]">is the seeker</p>
           <p className="mt-10 max-w-2xl animate-rise-in text-xl leading-relaxed text-muted-foreground [animation-delay:260ms]">
-            Runners: grab <span className="font-bold text-neon-gold">{round.orbsToWin} orbs</span>, hide in lockers, free caged friends.
+            Runners: charge <span className="font-bold text-neon-gold">{round.orbsToWin} orbs</span>, hide in lockers, free caged friends.
             <br />
             Seeker: catch everyone, or hold them off until time runs out.
           </p>

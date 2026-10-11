@@ -59,7 +59,7 @@ const RULES = [
     title: "Runners",
     tone: "text-neon-mint",
     ring: "from-neon-mint/25",
-    text: "You get 10 seconds to scatter while the lights are on. Then it goes dark: grab the glowing orbs as a team before time runs out. Stay out of the flashlight, and Dash to escape.",
+    text: "You get 10 seconds to scatter while the lights are on. Then it goes dark: charge the glowing orbs as a team (stand on one for 2 seconds) before time runs out. Stay out of the flashlight, and Dash to escape.",
   },
   {
     icon: Flashlight,
@@ -73,7 +73,7 @@ const RULES = [
     title: "Caught?",
     tone: "text-neon-orange",
     ring: "from-neon-orange/25",
-    text: "The first catch locks you in a cage until a teammate stands next to you and sets you free. Get caught again and you're a ghost: float through walls and BOO to fool the seeker.",
+    text: "The first catch locks you in a cage: a teammate standing next to you frees you, or pick the lock yourself (slowly). Get caught again and you're a ghost: float through walls and BOO to fool the seeker.",
   },
 ];
 

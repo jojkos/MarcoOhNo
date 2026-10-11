@@ -2,8 +2,8 @@ import { BlurFilter, Container, Graphics, TilingSprite } from "pixi.js";
 import type { Rect } from "@shared/geometry";
 import { textures } from "./textures";
 
-const WALL_TOP = 0x16264c;
-const WALL_FACE = 0x0a1124;
+const WALL_TOP = 0x26386a;
+const WALL_FACE = 0x121a34;
 const NEON = 0x4d9dff;
 const CRATE = 0x5a3d22;
 const CRATE_EDGE = 0xffa94d;
@@ -59,7 +59,7 @@ export class MazeView {
     });
     glow.filters = [new BlurFilter({ strength: 8, quality: 2 })];
 
-    const lockers = new Graphics();
+    const lockers = new Container();
     for (const l of m.lockers) {
       const g = new Graphics();
       // Local +x faces the opening.

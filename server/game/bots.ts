@@ -32,6 +32,14 @@ function bfs(g: Map<string, string[]>, from: string, to: string): string[] {
   return path;
 }
 
+/** Where each bot is heading, so teammates spread out instead of clumping. */
+const claims = new WeakMap<Game, Map<string, Vec>>();
+function claimsOf(game: Game) {
+  let m = claims.get(game);
+  if (!m) claims.set(game, (m = new Map()));
+  return m;
+}
+
 export class BotBrain {
   private graph: Map<string, string[]> | null = null;
   private graphRound = -1;
@@ -40,6 +48,7 @@ export class BotBrain {
   private hideUntil = 0;
   private stuckMs = 0;
   private last: Vec = { x: 0, y: 0 };
+  private hideout: Vec | null = null;
 
   constructor(
     private id: string,
@@ -50,6 +59,43 @@ export class BotBrain {
     this.graph = null;
     this.wanderGoal = null;
     this.hideUntil = 0;
+    this.hideout = null;
+    claimsOf(this.game).delete(this.id);
+  }
+
+  /** A far-off cell away from the seeker and from teammates' picks. */
+  private pickHideout(me: Vec, seeker: Vec): Vec {
+    const map = this.game.map!;
+    const others = [...claimsOf(this.game)].filter(([id]) => id !== this.id).map(([, v]) => v);
+    let best: Vec = me;
+    let bestScore = -Infinity;
+    for (let i = 0; i < 24; i++) {
+      const p = cellCenter(Math.floor(Math.random() * map.cols), Math.floor(Math.random() * map.rows));
+      const crowd = others.reduce((n, o) => n + Math.max(0, 260 - dist(o, p)), 0);
+      const score = dist(p, seeker) - crowd * 1.5 - dist(p, me) * 0.25 + Math.random() * 60;
+      if (score > bestScore) {
+        bestScore = score;
+        best = p;
+      }
+    }
+    return best;
+  }
+
+  /** Nearest orb, but avoid ones the seeker is near or a teammate already went for. */
+  private pickOrb(me: Vec, seeker: Vec | undefined): Vec | undefined {
+    const others = [...claimsOf(this.game)].filter(([id]) => id !== this.id).map(([, v]) => v);
+    let best: Vec | undefined;
+    let bestScore = Infinity;
+    this.game.state.orbs.forEach((o) => {
+      let score = dist(o, me);
+      if (others.some((c) => dist(c, o) < 40)) score += 400;
+      if (seeker && dist(o, seeker) < 260) score += 500;
+      if (score < bestScore) {
+        bestScore = score;
+        best = o;
+      }
+    });
+    return best;
   }
 
   private get me(): Player | undefined {
@@ -79,9 +125,12 @@ export class BotBrain {
       if (phase !== "hunt") return game.moveBot(me, 0, 0, dt);
       const lit = game.runners.find((r) => r.status === "free" && r.locker < 0 && r.lit);
       const heard = game.heard[game.heard.length - 1];
+      // Charging orbs glow brighter: a tell worth checking out.
+      const charging = [...game.state.orbs].filter((o) => o.charge > 0).sort((a, b) => dist(a, me) - dist(b, me))[0];
       if (lit) goal = lit;
-      else if (heard && dist(heard, me) > 40) goal = heard;
-      else goal = this.wander(me);
+      else if (charging && dist(charging, me) < 420) goal = charging;
+      else if (heard && dist(heard, me) > 40 && game.state.time - heard.at < 6000) goal = heard;
+      else goal = this.patrol(me);
       if (think) {
         if (me.cdA === 0 && Math.random() < 0.06) game.action(this.id, "a");
         if (lit && me.cdB === 0) game.action(this.id, "b");
@@ -120,16 +169,22 @@ export class BotBrain {
           if (me.item && me.exposure > 0.2) game.action(this.id, "item");
         }
       } else if (phase === "scatter" && seeker) {
-        goal = [...game.state.orbs].sort((a, b) => dist(b, seeker) - dist(a, seeker))[0] ?? this.wander(me);
+        this.hideout ??= this.pickHideout(me, seeker);
+        goal = this.hideout;
       } else {
-        const caged = game.runners.find((r) => r.status === "caged");
-        const orb = [...game.state.orbs].sort((a, b) => dist(a, me) - dist(b, me))[0];
+        // Rescue only when the seeker has wandered off.
+        const caged = game.runners.find((r) => r.status === "caged" && (!seeker || dist(seeker, r) > 300));
+        const orb = this.pickOrb(me, seeker);
         const box = !me.item ? [...game.state.items].sort((a, b) => dist(a, me) - dist(b, me))[0] : undefined;
-        goal = caged && (!orb || dist(caged, me) < dist(orb, me)) ? caged : orb ?? box ?? this.wander(me);
+        goal = caged && (!orb || dist(caged, me) < dist(orb, me) + 150) ? caged : orb ?? box ?? this.wander(me);
         if (box && dist(box, me) < 200) goal = box;
       }
     }
 
+    if (me.role === "runner") {
+      if (goal) claimsOf(game).set(this.id, goal);
+      else claimsOf(game).delete(this.id);
+    }
     if (!goal) return game.moveBot(me, 0, 0, dt);
     const step = me.status === "ghost" ? goal : this.nextWaypoint(me, goal);
     let ix = step.x - me.x;
@@ -154,6 +209,21 @@ export class BotBrain {
       this.stuckMs = 0;
     }
     game.moveBot(me, ix, iy, dt);
+  }
+
+  /** Seekers drift between orbs (where runners have to go) and random spots. */
+  private patrol(me: Vec): Vec {
+    const map = this.game.map!;
+    const here = cellOf(me.x, me.y, map.cols, map.rows);
+    if (!this.wanderGoal || this.wanderGoal === key(here.col, here.row)) {
+      const orbs = [...this.game.state.orbs];
+      if (orbs.length && Math.random() < 0.6) {
+        const o = orbs[Math.floor(Math.random() * orbs.length)];
+        const c = cellOf(o.x, o.y, map.cols, map.rows);
+        this.wanderGoal = key(c.col, c.row);
+      } else return this.wander(me);
+    }
+    return toPoint(this.wanderGoal);
   }
 
   private wander(me: Vec): Vec {

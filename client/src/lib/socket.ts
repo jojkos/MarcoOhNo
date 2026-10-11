@@ -3,7 +3,7 @@ import type { ServerToClientEvents, ClientToServerEvents } from "@shared/protoco
 
 export const socket: Socket<ServerToClientEvents, ClientToServerEvents> = io({
   autoConnect: false,
-  transports: ["websocket"],
+  transports: ["websocket", "polling"],
   reconnection: true,
   reconnectionDelay: 500,
   reconnectionDelayMax: 3000,

@@ -1,32 +1,45 @@
-import { Flashlight, PersonStanding } from "lucide-react";
+import { Flashlight, Footprints } from "lucide-react";
 import type { Role } from "@shared/protocol";
+import { cn } from "@/lib/utils";
 
 export function RoleReveal({ role, seekerName, orbs }: { role: Role; seekerName: string; orbs: number }) {
-  const isSeeker = role === "seeker";
+  const seeker = role === "seeker";
+  const Icon = seeker ? Flashlight : Footprints;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-6 animate-fade-in">
-      <div className="text-center animate-scale-in max-w-md">
-        <div
-          className={`mx-auto w-32 h-32 rounded-full flex items-center justify-center mb-6 animate-pulse-slow ${
-            isSeeker ? "bg-game-seeker/30" : "bg-game-runner/30"
-          }`}
-        >
-          {isSeeker ? (
-            <Flashlight className="w-16 h-16 text-game-seeker" />
-          ) : (
-            <PersonStanding className="w-16 h-16 text-game-runner" />
-          )}
+    <div
+      className={cn(
+        "fixed inset-0 z-50 flex items-center justify-center p-6 animate-fade-in",
+        seeker
+          ? "bg-[radial-gradient(ellipse_at_center,hsl(351_90%_22%),hsl(var(--background))_75%)]"
+          : "bg-[radial-gradient(ellipse_at_center,hsl(156_80%_14%),hsl(var(--background))_75%)]",
+      )}
+    >
+      <div className="max-w-sm text-center">
+        <div className="relative mx-auto mb-8 h-36 w-36">
+          <div className={cn("absolute inset-0 rounded-full animate-ring-out", seeker ? "border-4 border-neon-red" : "border-4 border-neon-mint")} />
+          <div
+            className={cn(
+              "relative flex h-full w-full items-center justify-center rounded-full animate-pop-in",
+              seeker ? "bg-neon-red/20 shadow-[0_0_80px_-10px_hsl(var(--seeker))]" : "bg-neon-mint/15 shadow-[0_0_80px_-10px_hsl(var(--runner))]",
+            )}
+          >
+            <Icon className={cn("h-16 w-16", seeker ? "text-neon-red" : "text-neon-mint")} />
+          </div>
         </div>
+        <p className="mb-1 font-display text-sm font-bold uppercase tracking-[0.4em] text-muted-foreground animate-rise-in">You are</p>
         <h1
-          className={`font-display text-4xl font-bold tracking-wider mb-4 ${isSeeker ? "text-game-seeker" : "text-game-runner"}`}
+          className={cn(
+            "font-display text-6xl font-bold uppercase animate-rise-in [animation-delay:80ms]",
+            seeker ? "text-neon-red glow-text-red" : "text-neon-mint glow-text-mint",
+          )}
           data-testid="text-role"
         >
-          {isSeeker ? "YOU ARE THE SEEKER" : "YOU ARE A RUNNER"}
+          {seeker ? "The seeker" : "A runner"}
         </h1>
-        <p className="text-lg text-muted-foreground font-game leading-snug">
-          {isSeeker
-            ? `Count to 10 while they hide. Then catch them all, or stop them collecting ${orbs} orbs before time runs out.`
-            : `${seekerName} is hunting. You have 10 seconds to scatter. Then collect ${orbs} orbs as a team and free caged friends.`}
+        <p className="mt-5 text-lg leading-relaxed text-foreground/80 animate-rise-in [animation-delay:160ms]">
+          {seeker
+            ? `Count to 10 while they hide. Then catch them all, or stop them grabbing ${orbs} orbs before time runs out.`
+            : `${seekerName} is hunting. Scatter while the lights are on, then grab ${orbs} orbs as a team.`}
         </p>
       </div>
     </div>

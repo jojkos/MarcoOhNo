@@ -29,20 +29,20 @@ const DEPTH = {
 };
 
 const COLORS = {
-  bg: 0x04060b,
-  floor: 0x0b1322,
-  grid: 0x13203a,
-  wall: 0x253a5e,
-  wallEdge: 0x4a6fa5,
-  memoryFill: 0x16233d,
-  memoryEdge: 0x3d5a80,
+  bg: 0x03040a,
+  floor: 0x080d1c,
+  grid: 0x101d3d,
+  wall: 0x14244a,
+  wallEdge: 0x4d9dff,
+  memoryFill: 0x0f1b38,
+  memoryEdge: 0x2f63b8,
   cone: 0xffe066,
-  polo: 0xcc66ff,
+  polo: 0xb46bff,
   noise: 0xffa94d,
-  caught: 0xff4444,
-  freed: 0x4cd964,
-  orb: 0xffd43b,
-  shield: 0x66d9ff,
+  caught: 0xff3d5a,
+  freed: 0x3dffb5,
+  orb: 0xffd23f,
+  shield: 0x38d6ff,
 };
 
 interface Sprite {
@@ -152,14 +152,17 @@ export class GameScene extends Phaser.Scene {
     const { width, height, walls } = round;
     const g = this.floorG.clear();
     g.fillStyle(COLORS.floor, 1).fillRect(0, 0, width, height);
-    g.lineStyle(1, COLORS.grid, 0.6);
+    g.lineStyle(1, COLORS.grid, 0.7);
     for (let x = 0; x <= width; x += 40) g.lineBetween(x, 0, x, height);
     for (let y = 0; y <= height; y += 40) g.lineBetween(0, y, width, y);
 
     const w = this.wallsG.clear();
     w.fillStyle(COLORS.wall, 1);
     walls.forEach((r) => w.fillRect(r.x, r.y, r.w, r.h));
-    w.lineStyle(2, COLORS.wallEdge, 0.9);
+    // Fake neon glow: a wide faint stroke under a crisp one (drawn once per round).
+    w.lineStyle(8, COLORS.wallEdge, 0.08);
+    walls.forEach((r) => w.strokeRect(r.x, r.y, r.w, r.h));
+    w.lineStyle(2, COLORS.wallEdge, 0.95);
     walls.forEach((r) => w.strokeRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2));
 
     const m = 3000;
@@ -297,7 +300,7 @@ export class GameScene extends Phaser.Scene {
     if (label) {
       const text = this.add
         .text(x, y - 20, label, {
-          fontFamily: "Orbitron",
+          fontFamily: "Chakra Petch",
           fontSize: "22px",
           fontStyle: "bold",
           color: "#" + color.toString(16).padStart(6, "0"),
@@ -550,7 +553,7 @@ export class GameScene extends Phaser.Scene {
     const nose = this.add.circle(9, 0, p.role === "seeker" ? 6 : 4, p.role === "seeker" ? 0xffe066 : 0xffffff, 0.95);
     const label = this.add
       .text(0, -r - 6, lobby?.name ?? "?", {
-        fontFamily: "Rajdhani",
+        fontFamily: "Outfit",
         fontSize: this.view === "tv" ? "17px" : "15px",
         fontStyle: "bold",
         color: "#ffffff",

@@ -1,6 +1,6 @@
-import { Flashlight, Ghost, Lock, Sparkles, WifiOff } from "lucide-react";
-import type { LobbyPlayer, SnapPlayer } from "@shared/protocol";
-import { SEEKER_COLOR } from "@shared/config";
+import { Flashlight, Ghost, Lock, WifiOff, Footprints, HeartHandshake } from "lucide-react";
+import type { SnapPlayer } from "@shared/protocol";
+import { cn } from "@/lib/utils";
 
 export function formatTime(ms: number) {
   const s = Math.max(0, Math.ceil(ms / 1000));
@@ -21,77 +21,77 @@ export async function joinBase(): Promise<string> {
   return origin;
 }
 
-export function Avatar({ player, size = 40, seeker = false }: { player: LobbyPlayer; size?: number; seeker?: boolean }) {
-  return (
-    <div
-      className="rounded-full flex items-center justify-center text-white font-bold shrink-0 border-2 border-white/30"
-      style={{
-        backgroundColor: seeker ? SEEKER_COLOR : player.color,
-        width: size,
-        height: size,
-        fontSize: size * 0.45,
-        opacity: player.connected ? 1 : 0.4,
-      }}
-    >
-      {player.name.charAt(0).toUpperCase()}
-    </div>
-  );
-}
-
-export function StatusIcon({ p, connected }: { p?: SnapPlayer; connected: boolean }) {
-  if (!connected) return <WifiOff className="w-4 h-4 text-muted-foreground" />;
+export function StatusIcon({ p, connected, className }: { p?: SnapPlayer; connected: boolean; className?: string }) {
+  const c = cn("h-4 w-4", className);
+  if (!connected) return <WifiOff className={cn(c, "text-muted-foreground")} />;
   if (!p) return null;
-  if (p.role === "seeker") return <Flashlight className="w-4 h-4 text-game-seeker" />;
-  if (p.status === "caged") return <Lock className="w-4 h-4 text-orange-300" />;
-  if (p.status === "ghost") return <Ghost className="w-4 h-4 text-muted-foreground" />;
-  return <Sparkles className="w-4 h-4 text-game-runner" />;
+  if (p.role === "seeker") return <Flashlight className={cn(c, "text-neon-red")} />;
+  if (p.status === "caged") return <Lock className={cn(c, "text-neon-orange")} />;
+  if (p.status === "ghost") return <Ghost className={cn(c, "text-muted-foreground")} />;
+  return <Footprints className={cn(c, "text-neon-mint")} />;
 }
 
 export function OrbMeter({ collected, need, large = false }: { collected: number; need: number; large?: boolean }) {
-  const pips = Array.from({ length: need }, (_, i) => i < collected);
   return (
-    <div className="flex items-center gap-2">
-      <div className={`flex flex-wrap gap-1 ${large ? "max-w-[260px]" : "max-w-[120px]"}`}>
-        {pips.map((on, i) => (
+    <div className="flex items-center gap-2.5">
+      <div className={cn("flex flex-wrap justify-end gap-1", large ? "max-w-[280px]" : "max-w-[110px]")}>
+        {Array.from({ length: need }, (_, i) => (
           <div
             key={i}
-            className={`rounded-full ${large ? "w-4 h-4" : "w-2.5 h-2.5"} ${
-              on ? "bg-yellow-300 shadow-[0_0_8px_rgba(255,212,59,0.9)]" : "bg-white/15"
-            }`}
+            className={cn(
+              "rounded-full transition-all duration-300",
+              large ? "h-4 w-4" : "h-2.5 w-2.5",
+              i < collected ? "bg-neon-gold shadow-[0_0_10px_2px_hsl(var(--orb)/0.7)]" : "border border-white/15 bg-white/[0.12]",
+            )}
           />
         ))}
       </div>
-      <span className={`font-display tabular-nums ${large ? "text-2xl" : "text-sm"}`}>
+      <span className={cn("font-display font-bold tabular-nums", large ? "text-2xl" : "text-sm")}>
         {collected}/{need}
       </span>
     </div>
   );
 }
 
+const RULES = [
+  {
+    icon: Footprints,
+    title: "Runners",
+    tone: "text-neon-mint",
+    ring: "from-neon-mint/25",
+    text: "You get 10 seconds to scatter while the lights are on. Then it goes dark: grab the glowing orbs as a team before time runs out. Stay out of the flashlight, and Dash to escape.",
+  },
+  {
+    icon: Flashlight,
+    title: "Seeker",
+    tone: "text-neon-red",
+    ring: "from-neon-red/25",
+    text: "Keep a runner in your beam to catch them. Shout POLO and every runner gives away roughly where they are. You win when nobody is left free, or when time runs out.",
+  },
+  {
+    icon: HeartHandshake,
+    title: "Caught?",
+    tone: "text-neon-orange",
+    ring: "from-neon-orange/25",
+    text: "The first catch locks you in a cage until a teammate stands next to you and sets you free. Get caught again and you're a ghost: float through walls and BOO to fool the seeker.",
+  },
+];
+
 export function HowToPlay({ compact = false }: { compact?: boolean }) {
-  const items = [
-    {
-      title: "Runners",
-      color: "text-game-runner",
-      text: "You get 10 seconds to scatter while the lights are on. Then it goes dark: collect the glowing orbs together before time runs out, and stay out of the flashlight. Dash to escape.",
-    },
-    {
-      title: "Seeker",
-      color: "text-game-seeker",
-      text: "Keep a runner in your flashlight to catch them. Shout POLO to make every runner give away roughly where they are. You win if everyone is caught, or if the orbs aren't collected in time.",
-    },
-    {
-      title: "Caught?",
-      color: "text-orange-300",
-      text: "The first catch locks you in a cage. A teammate who stands next to you sets you free. Get caught again and you become a ghost: float through walls and BOO to trick the seeker with fake noises.",
-    },
-  ];
   return (
-    <div className={`grid gap-3 ${compact ? "grid-cols-1" : "md:grid-cols-3"}`}>
-      {items.map((it) => (
-        <div key={it.title} className="rounded-lg bg-white/5 border border-white/10 p-3">
-          <p className={`font-display text-sm tracking-wider mb-1 ${it.color}`}>{it.title.toUpperCase()}</p>
-          <p className="text-sm text-muted-foreground leading-snug">{it.text}</p>
+    <div className={cn("grid gap-3", compact ? "grid-cols-1" : "md:grid-cols-3")}>
+      {RULES.map((r, i) => (
+        <div
+          key={r.title}
+          className="glass relative overflow-hidden rounded-2xl p-4 animate-rise-in"
+          style={{ animationDelay: `${i * 80}ms` }}
+        >
+          <div className={cn("pointer-events-none absolute -right-10 -top-10 h-32 w-32 rounded-full bg-gradient-to-br to-transparent blur-2xl", r.ring)} />
+          <div className="mb-2 flex items-center gap-2">
+            <r.icon className={cn("h-5 w-5", r.tone)} />
+            <p className={cn("font-display text-sm font-bold uppercase tracking-[0.2em]", r.tone)}>{r.title}</p>
+          </div>
+          <p className="text-sm leading-relaxed text-muted-foreground">{r.text}</p>
         </div>
       ))}
     </div>

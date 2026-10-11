@@ -1,35 +1,28 @@
 import { useEffect } from "react";
+import { Switch, Route, Redirect } from "wouter";
 import { Toaster } from "@/components/ui/toaster";
-import { useGameStore } from "@/lib/gameStore";
 import { initNet } from "@/lib/net";
-import { WelcomeScreen } from "@/components/game/WelcomeScreen";
-import { TVLobby } from "@/components/game/TVLobby";
-import { MobileLobby } from "@/components/game/MobileLobby";
-import { TVGameView } from "@/components/game/TVGameView";
-import { MobileGameView } from "@/components/game/MobileGameView";
+import { Home } from "@/pages/Home";
+import { Join } from "@/pages/Join";
+import { TvPage, PlayPage } from "@/pages/RoomPages";
 
-function Splash({ text }: { text: string }) {
-  return <div className="h-full flex items-center justify-center text-muted-foreground animate-pulse">{text}</div>;
-}
-
-function GameApp() {
-  useEffect(() => initNet(), []);
-  const kind = useGameStore((s) => s.kind);
-  const room = useGameStore((s) => s.room);
-  const resuming = useGameStore((s) => s.resuming);
-
-  if (!kind) return resuming ? <Splash text="Reconnecting…" /> : <WelcomeScreen />;
-  if (!room) return <Splash text="Connecting…" />;
-
-  if (kind === "tv") return room.phase === "lobby" ? <TVLobby /> : <TVGameView />;
-  return room.phase === "lobby" ? <MobileLobby /> : <MobileGameView />;
-}
+const code = (raw: string) => raw.toUpperCase().slice(0, 4);
 
 export default function App() {
+  useEffect(() => initNet(), []);
   return (
     <>
       <Toaster />
-      <GameApp />
+      <Switch>
+        <Route path="/" component={Home} />
+        <Route path="/join">{() => <Join />}</Route>
+        <Route path="/join/:code">{(p) => <Join key={p.code} initialCode={code(p.code)} />}</Route>
+        <Route path="/tv/:code">{(p) => <TvPage key={p.code} code={code(p.code)} />}</Route>
+        <Route path="/play/:code">{(p) => <PlayPage key={p.code} code={code(p.code)} />}</Route>
+        <Route>
+          <Redirect to="/" replace />
+        </Route>
+      </Switch>
     </>
   );
 }

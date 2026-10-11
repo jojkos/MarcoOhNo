@@ -110,11 +110,26 @@ export class Room {
     return this.seats.find((s) => s.token === token && !s.left);
   }
 
-  canJoin(name: string): string | null {
-    if (this.phase !== "lobby" && this.phase !== "round_over") return "Game in progress. Wait for the round to end.";
-    if (this.seats.filter((s) => !s.left).length >= RULES.maxPlayers) return "Room is full";
-    if (this.seats.some((s) => !s.left && s.name.toLowerCase() === name.toLowerCase())) return "Name already taken";
+  /** A disconnected seat with this name can be reclaimed (e.g. the phone lost its saved token). */
+  reclaimableSeat(name: string): Seat | undefined {
+    return this.seats.find((s) => !s.left && !s.connected && s.name.toLowerCase() === name.toLowerCase());
+  }
+
+  get joinable(): boolean {
+    return (this.phase === "lobby" || this.phase === "round_over") && this.seats.filter((s) => !s.left).length < RULES.maxPlayers;
+  }
+
+  canJoin(name: string): { reason: "in_progress" | "full" | "name_taken"; error: string } | null {
+    if (this.phase !== "lobby" && this.phase !== "round_over")
+      return { reason: "in_progress", error: "A round is in progress. You can join when it ends." };
+    if (this.seats.filter((s) => !s.left).length >= RULES.maxPlayers) return { reason: "full", error: "This room is full" };
+    if (this.seats.some((s) => !s.left && s.name.toLowerCase() === name.toLowerCase()))
+      return { reason: "name_taken", error: "Someone in this room already has that name" };
     return null;
+  }
+
+  playerCount(): number {
+    return this.seats.filter((s) => !s.left).length;
   }
 
   addPlayer(name: string): Seat {

@@ -5,7 +5,7 @@ import { Server as SocketIOServer, type Socket } from "socket.io";
 import { log } from "./index";
 import { Room } from "./game/room";
 import { TICK_RATE, RULES } from "@shared/config";
-import type { ClientToServerEvents, ServerToClientEvents } from "@shared/protocol";
+import type { ClientToServerEvents, RoomStatus, ServerToClientEvents } from "@shared/protocol";
 
 interface SocketData {
   code: string | null;
@@ -17,8 +17,24 @@ type IO = SocketIOServer<ClientToServerEvents, ServerToClientEvents, {}, SocketD
 type GameSocket = Socket<ClientToServerEvents, ServerToClientEvents, {}, SocketData>;
 
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const normCode = (c: unknown) =>
+  String(c ?? "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .slice(0, 4);
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
+  const io: IO = new SocketIOServer(httpServer, {
+    cors: { origin: "*" },
+    // Notice dead phones quickly so their seat shows as reconnecting.
+    pingInterval: 10000,
+    pingTimeout: 8000,
+  });
+  const rooms = new Map<string, Room>();
+  // Which socket currently owns a seat / the TV, so a stale socket's disconnect is ignored.
+  const seatSockets = new Map<string, string>();
+  const hostSockets = new Map<string, string>();
+
   // LAN addresses, so a TV opened on localhost can still show phones a reachable join link.
   app.get("/api/lan", (_req, res) => {
     const ips = Object.values(networkInterfaces())
@@ -28,11 +44,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json({ ips, port: Number(process.env.PORT || 5000) });
   });
 
-  const io: IO = new SocketIOServer(httpServer, { cors: { origin: "*" } });
-  const rooms = new Map<string, Room>();
-  // Which socket currently owns a seat / the TV, so a stale socket's disconnect is ignored.
-  const seatSockets = new Map<string, string>();
-  const hostSockets = new Map<string, string>();
+  app.get("/api/rooms/:code", (req, res) => {
+    const room = rooms.get(normCode(req.params.code));
+    const status: RoomStatus = room
+      ? { exists: true, phase: room.phase, players: room.playerCount(), joinable: room.joinable }
+      : { exists: false };
+    res.set("Cache-Control", "no-store").json(status);
+  });
 
   function newCode(): string {
     for (;;) {
@@ -54,6 +72,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return room;
   }
 
+  /** Stop following the current room. Seats and host status are kept (marked offline). */
   function detach(socket: GameSocket) {
     const { code, playerId, isHost } = socket.data;
     if (!code) return;
@@ -70,67 +89,108 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     socket.data = { code: null, playerId: null, isHost: false };
   }
 
+  // Callers reply to the client first and only then send room state, so the client
+  // already knows which room it is in when that state arrives.
+  function attach(socket: GameSocket, room: Room, data: SocketData) {
+    detach(socket);
+    socket.data = data;
+    socket.join(room.code);
+  }
+
+  /** Kick whichever other socket held this seat / TV. */
+  function evict(map: Map<string, string>, key: string, socket: GameSocket, reason: string) {
+    const previous = map.get(key);
+    if (!previous || previous === socket.id) return;
+    const old = io.sockets.sockets.get(previous);
+    if (old) {
+      old.emit("kicked", reason);
+      if (old.data.code) old.leave(old.data.code);
+      old.data = { code: null, playerId: null, isHost: false };
+    }
+  }
+
   function canControl(socket: GameSocket, room: Room) {
     return socket.data.isHost || (socket.data.playerId !== null && socket.data.playerId === room.vipId);
+  }
+
+  function roomOf(socket: GameSocket) {
+    return socket.data.code ? rooms.get(socket.data.code) : undefined;
   }
 
   io.on("connection", (socket: GameSocket) => {
     socket.data = { code: null, playerId: null, isHost: false };
 
-    socket.on("host", (req, cb) => {
+    socket.on("createRoom", (cb) => {
       if (typeof cb !== "function") return;
-      detach(socket);
-      let room = req?.code ? rooms.get(String(req.code).toUpperCase()) : undefined;
-      if (room && room.hostToken !== req.hostToken) room = undefined;
-      if (!room) room = createRoom();
-
-      const previous = hostSockets.get(room.code);
-      if (previous && previous !== socket.id) io.sockets.sockets.get(previous)?.emit("notice", "TV opened elsewhere");
+      const room = createRoom();
       hostSockets.set(room.code, socket.id);
       room.hostConnected = true;
-      socket.data = { code: room.code, playerId: null, isHost: true };
-      socket.join(room.code);
+      attach(socket, room, { code: room.code, playerId: null, isHost: true });
       cb({ ok: true, code: room.code, hostToken: room.hostToken });
+      socket.emit("room", room.info());
+    });
+
+    socket.on("hostRoom", (req, cb) => {
+      if (typeof cb !== "function") return;
+      const code = normCode(req?.code);
+      const room = rooms.get(code);
+      if (!room) return cb({ ok: false, reason: "not_found", error: `Room ${code} has ended` });
+      if (room.hostToken !== req.hostToken) return cb({ ok: false, reason: "bad_token", error: "This screen isn't the host" });
+      evict(hostSockets, code, socket, "This room was opened as TV on another screen");
+      hostSockets.set(code, socket.id);
+      room.hostConnected = true;
+      attach(socket, room, { code, playerId: null, isHost: true });
+      cb({ ok: true, code, hostToken: room.hostToken });
+      socket.emit("room", room.info());
+    });
+
+    socket.on("watchRoom", (req, cb) => {
+      if (typeof cb !== "function") return;
+      const code = normCode(req?.code);
+      const room = rooms.get(code);
+      if (!room) return cb({ ok: false, reason: "not_found", error: `Room ${code} has ended` });
+      attach(socket, room, { code, playerId: null, isHost: false });
+      cb({ ok: true, code });
       socket.emit("room", room.info());
     });
 
     socket.on("join", (req, cb) => {
       if (typeof cb !== "function") return;
-      const code = String(req?.code ?? "").toUpperCase();
+      const code = normCode(req?.code);
       const room = rooms.get(code);
-      if (!room) return cb({ ok: false, error: "Room not found" });
+      if (!room) return cb({ ok: false, reason: "not_found", error: `Room ${code} doesn't exist (anymore)` });
 
       let seat = req.token ? room.playerByToken(String(req.token)) : undefined;
-      if (!seat) {
-        if (req.token && !req.name) return cb({ ok: false, error: "Your seat expired. Join again." });
-        const name = String(req.name ?? "").trim().slice(0, 12);
-        if (!name) return cb({ ok: false, error: "Enter a name" });
-        const err = room.canJoin(name);
-        if (err) return cb({ ok: false, error: err });
-        seat = room.addPlayer(name);
-        log(`${name} joined ${code}`, "game");
+      if (!seat && req.token && !req.name) {
+        return cb({ ok: false, reason: "seat_expired", error: "Your seat in this room expired. Join again." });
       }
-
-      detach(socket);
-      const previous = seatSockets.get(seat.id);
-      if (previous && previous !== socket.id) {
-        const old = io.sockets.sockets.get(previous);
-        if (old) {
-          old.emit("notice", "You joined from another tab or device");
-          old.leave(code);
-          old.data = { code: null, playerId: null, isHost: false };
+      if (!seat) {
+        const name = String(req.name ?? "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 12);
+        if (!name) return cb({ ok: false, reason: "bad_name", error: "Enter a name" });
+        seat = room.reclaimableSeat(name);
+        if (!seat) {
+          const err = room.canJoin(name);
+          if (err) return cb({ ok: false, ...err });
+          seat = room.addPlayer(name);
+          log(`${name} joined ${code}`, "game");
         }
       }
+
+      evict(seatSockets, seat.id, socket, "You opened this seat in another tab or device");
       seatSockets.set(seat.id, socket.id);
-      socket.data = { code, playerId: seat.id, isHost: false };
-      socket.join(code);
-      room.setConnected(seat.id, true);
-      cb({ ok: true, playerId: seat.id, token: seat.token, code });
+      attach(socket, room, { code, playerId: seat.id, isHost: false });
+      cb({ ok: true, playerId: seat.id, token: seat.token, code, name: seat.name });
+      room.setConnected(seat.id, true); // broadcasts the room state, including to this socket
     });
 
+    socket.on("detach", () => detach(socket));
+
     socket.on("leave", () => {
-      const { code, playerId } = socket.data;
-      const room = code ? rooms.get(code) : undefined;
+      const room = roomOf(socket);
+      const { playerId } = socket.data;
       if (room && playerId) {
         seatSockets.delete(playerId);
         room.leave(playerId);
@@ -142,7 +202,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
 
     socket.on("start", () => {
-      const room = socket.data.code ? rooms.get(socket.data.code) : undefined;
+      const room = roomOf(socket);
       if (!room) return;
       if (!canControl(socket, room)) return void socket.emit("notice", "Only the host can start");
       const err = room.start();
@@ -150,14 +210,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
 
     socket.on("toLobby", () => {
-      const room = socket.data.code ? rooms.get(socket.data.code) : undefined;
+      const room = roomOf(socket);
       if (room && canControl(socket, room)) room.toLobby();
     });
 
     socket.on("input", (inputs) => {
-      const { code, playerId } = socket.data;
-      if (!code || !playerId) return;
-      rooms.get(code)?.queueInputs(playerId, inputs);
+      const { playerId } = socket.data;
+      if (playerId) roomOf(socket)?.queueInputs(playerId, inputs);
     });
 
     socket.on("disconnect", () => detach(socket));

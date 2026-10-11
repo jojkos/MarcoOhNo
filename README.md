@@ -12,8 +12,8 @@ everyone's phone is their controller.
 npm install
 npm run dev
 ```
-1. Open `http://localhost:5000` on the TV or laptop and choose **Host on this screen**.
-2. Players scan the QR code (or open the shown address and type the room code) on phones on the same Wi-Fi.
+1. Open `http://localhost:5000` on the TV or laptop and choose **Host a game**.
+2. Players scan the QR code on their phones (or open the shown address and type the room code). If someone drops out or reloads, they rejoin from the home screen.
 3. Press **START**. The seeker role rotates every round.
 
 Want to try it alone? `npm run bots -- ROOMCODE 3` fills the room with bots. On a desktop browser

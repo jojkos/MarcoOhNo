@@ -14,28 +14,30 @@ export interface Hud {
   threat: number;
 }
 
-export type ClientKind = "tv" | "mobile";
+export type AttachMode = "tv" | "play";
+
+/** Which room this tab is following, and how that's going. */
+export interface Attachment {
+  mode: AttachMode;
+  code: string;
+  status: "connecting" | "attached" | "error";
+  /** TV screens that own the host token can start rounds; others just watch. */
+  isHost: boolean;
+  error?: { reason: string; message: string };
+}
 
 interface GameStore {
   connected: boolean;
-  kind: ClientKind | null;
+  attachment: Attachment | null;
   playerId: string | null;
   room: RoomInfo | null;
   hud: Hud | null;
-  /** True while trying to reattach to a saved session after load/reconnect. */
-  resuming: boolean;
 }
 
 export const useGameStore = create<GameStore>(() => ({
   connected: false,
-  kind: null,
+  attachment: null,
   playerId: null,
   room: null,
   hud: null,
-  resuming: false,
 }));
-
-export function myLobbyPlayer() {
-  const { room, playerId } = useGameStore.getState();
-  return room?.players.find((p) => p.id === playerId) ?? null;
-}

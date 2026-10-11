@@ -240,3 +240,25 @@ describe("connections", () => {
     expect(room.playerByToken(seat.token)?.id).toBe(seat.id);
   });
 });
+
+describe("joining", () => {
+  it("lets a dropped player reclaim their seat by name, but not steal a connected one", () => {
+    const { room, ids } = setup(2);
+    expect(room.reclaimableSeat("P0")).toBeUndefined(); // still connected
+    expect(room.canJoin("p0")?.reason).toBe("name_taken");
+    room.setConnected(ids[0], false);
+    expect(room.reclaimableSeat("p0")?.id).toBe(ids[0]);
+  });
+
+  it("is only joinable between rounds and while not full", () => {
+    const { room } = setup(2);
+    expect(room.joinable).toBe(true);
+    room.start();
+    expect(room.joinable).toBe(false);
+    expect(room.canJoin("New")?.reason).toBe("in_progress");
+    room.toLobby();
+    for (let i = room.playerCount(); i < RULES.maxPlayers; i++) room.addPlayer(`X${i}`);
+    expect(room.joinable).toBe(false);
+    expect(room.canJoin("Late")?.reason).toBe("full");
+  });
+});

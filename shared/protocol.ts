@@ -120,24 +120,47 @@ export interface InputMsg {
 
 export type Ack<T> = (res: T) => void;
 
-export type JoinResult =
-  | { ok: true; playerId: string; token: string; code: string }
-  | { ok: false; error: string };
+export type JoinErrorReason = "not_found" | "full" | "in_progress" | "name_taken" | "bad_name" | "seat_expired";
 
-export type HostResult = { ok: true; code: string; hostToken: string } | { ok: false; error: string };
+export type JoinResult =
+  | { ok: true; playerId: string; token: string; code: string; name: string }
+  | { ok: false; error: string; reason: JoinErrorReason };
+
+export type HostResult =
+  | { ok: true; code: string; hostToken: string }
+  | { ok: false; error: string; reason: "not_found" | "bad_token" };
+
+export type WatchResult = { ok: true; code: string } | { ok: false; error: string; reason: "not_found" };
+
+/** GET /api/rooms/:code */
+export interface RoomStatus {
+  exists: boolean;
+  phase?: Phase;
+  players?: number;
+  joinable?: boolean;
+}
 
 export interface ServerToClientEvents {
   room: (room: RoomInfo) => void;
   snap: (snap: Snapshot) => void;
   fx: (events: FxEvent[]) => void;
   notice: (message: string) => void;
+  /** This client was detached from its room (seat opened elsewhere, room closed...). */
+  kicked: (reason: string) => void;
 }
 
 export interface ClientToServerEvents {
-  /** TV creates a room, or reclaims one with its host token after a reload. */
-  host: (req: { code?: string; hostToken?: string }, cb: Ack<HostResult>) => void;
+  /** TV creates a brand new room. */
+  createRoom: (cb: Ack<HostResult>) => void;
+  /** TV reclaims a room it created (host token). Never creates a room implicitly. */
+  hostRoom: (req: { code: string; hostToken: string }, cb: Ack<HostResult>) => void;
+  /** Extra screen watching a room without controlling it. */
+  watchRoom: (req: { code: string }, cb: Ack<WatchResult>) => void;
   /** Phone joins a room by name, or resumes its seat with a token. */
   join: (req: { code: string; name?: string; token?: string }, cb: Ack<JoinResult>) => void;
+  /** Stop following the room but keep the seat (navigated away). */
+  detach: () => void;
+  /** Give up the seat for good. */
   leave: () => void;
   start: () => void;
   toLobby: () => void;

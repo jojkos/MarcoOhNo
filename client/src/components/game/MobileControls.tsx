@@ -7,11 +7,11 @@ import { input } from "@/game/input";
 const JOY_RADIUS = 56;
 const DEADZONE = 0.12;
 
-const ABILITY_UI: Record<Ability, { label: string; icon: typeof Zap; color: string }> = {
-  polo: { label: "POLO", icon: Megaphone, color: "bg-purple-500" },
-  sprint: { label: "SPRINT", icon: Zap, color: "bg-orange-500" },
-  dash: { label: "DASH", icon: Wind, color: "bg-emerald-500" },
-  boo: { label: "BOO", icon: Ghost, color: "bg-slate-400" },
+const ABILITY_UI: Record<Ability, { label: string; icon: typeof Zap; bg: string; glow: string }> = {
+  polo: { label: "POLO", icon: Megaphone, bg: "linear-gradient(135deg,#c89bff,#7b3dff)", glow: "rgba(138,77,255,0.75)" },
+  sprint: { label: "SPRINT", icon: Zap, bg: "linear-gradient(135deg,#ffc27a,#ff7a1a)", glow: "rgba(255,122,26,0.7)" },
+  dash: { label: "DASH", icon: Wind, bg: "linear-gradient(135deg,#9dffd8,#16c98a)", glow: "rgba(34,227,154,0.7)" },
+  boo: { label: "BOO", icon: Ghost, bg: "linear-gradient(135deg,#e2e8f0,#7c8aa5)", glow: "rgba(200,210,230,0.5)" },
 };
 
 /** Floating joystick: touch anywhere on the left side of the screen. */
@@ -70,17 +70,18 @@ function Joystick() {
     >
       {base ? (
         <div
-          className="fixed rounded-full border-2 border-white/30 bg-white/10 pointer-events-none"
+          className="pointer-events-none fixed rounded-full border-2 border-neon-cyan/40 bg-neon-cyan/[0.06] shadow-[0_0_30px_-6px_hsl(var(--primary)/0.6)]"
           style={{ left: base.x - JOY_RADIUS, top: base.y - JOY_RADIUS, width: JOY_RADIUS * 2, height: JOY_RADIUS * 2 }}
         >
           <div
-            className="absolute w-14 h-14 rounded-full bg-white/70 shadow-lg"
+            className="absolute h-14 w-14 rounded-full bg-[radial-gradient(circle_at_35%_30%,#ffffff,#9fe9ff)] shadow-[0_0_24px_2px_hsl(var(--primary)/0.7)]"
             style={{ left: JOY_RADIUS - 28 + knob.x, top: JOY_RADIUS - 28 + knob.y }}
           />
         </div>
       ) : (
-        <div className="absolute bottom-10 left-8 text-xs text-white/30 uppercase tracking-widest pointer-events-none">
-          Drag here to move
+        <div className="pointer-events-none absolute bottom-[max(2.5rem,env(safe-area-inset-bottom))] left-8 flex items-center gap-3 text-xs uppercase tracking-[0.25em] text-white/30">
+          <span className="h-12 w-12 rounded-full border-2 border-dashed border-white/20" />
+          Drag to move
         </div>
       )}
     </div>
@@ -94,13 +95,11 @@ function AbilityButton({ ability, cooldown, slot }: { ability: Ability; cooldown
   const pct = ready ? 100 : 100 - (cooldown / abilityCooldown(ability)) * 100;
   return (
     <button
-      className={`relative w-[88px] h-[88px] rounded-full flex flex-col items-center justify-center text-white font-display text-xs tracking-wider shadow-xl touch-none select-none border-2 border-white/40 transition-transform active:scale-90 ${
-        ready ? ui.color : "bg-zinc-700"
-      }`}
+      className="relative flex h-[88px] w-[88px] touch-none select-none flex-col items-center justify-center rounded-full border-2 border-white/30 font-display text-xs font-bold tracking-wider text-white transition-transform active:scale-90"
       style={
         ready
-          ? undefined
-          : { background: `conic-gradient(rgba(255,255,255,0.35) ${pct}%, rgb(63 63 70) ${pct}% 100%)` }
+          ? { background: ui.bg, boxShadow: `0 0 30px -4px ${ui.glow}, inset 0 2px 0 rgba(255,255,255,0.35)`, textShadow: "0 1px 2px rgba(0,0,0,0.4)" }
+          : { background: `conic-gradient(rgba(255,255,255,0.28) ${pct}%, rgb(30 33 48) ${pct}% 100%)` }
       }
       onPointerDown={(e) => {
         e.preventDefault();
@@ -109,7 +108,7 @@ function AbilityButton({ ability, cooldown, slot }: { ability: Ability; cooldown
       }}
       data-testid={`button-${ability}`}
     >
-      <Icon className="w-7 h-7 mb-0.5" />
+      <Icon className="mb-0.5 h-7 w-7" />
       {ready ? ui.label : Math.ceil(cooldown / 1000)}
     </button>
   );

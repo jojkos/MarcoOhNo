@@ -74,21 +74,34 @@ export class GameRenderer {
   private cam = { x: 0, y: 0, zoom: 1, ready: false };
   private punch: { x: number; y: number; t: number } | null = null;
   private time = 0;
+  /** Seeker's current light polygon, for deciding which effects a seeker view may see. */
+  private visCone: Vec[] | null = null;
   /** Adaptive quality: slow devices drop to 1x resolution. */
-  private perf = { frames: 0, slow: 0, checkAt: 0 };
+  private perf = { frames: 0, slow: 0, fast: 0, checkAt: 0, low: false };
+  private host: HTMLElement | null = null;
+  private needsResize = true;
   private unsubs: (() => void)[] = [];
   private boundRoom: Room<GameState> | null = null;
 
   constructor(private view: ViewKind) {}
 
   async init(el: HTMLElement) {
+    this.host = el;
+    // Canvas text keeps whatever font exists when it's created: wait briefly for the web fonts.
+    await Promise.race([
+      Promise.all([document.fonts?.load('700 16px "Chakra Petch"'), document.fonts?.load('600 16px "Outfit"')]).catch(() => {}),
+      new Promise((r) => setTimeout(r, 1500)),
+    ]);
+    if (this.destroyed) return;
     await this.app.init({
-      resizeTo: el,
+      width: Math.max(1, el.clientWidth),
+      height: Math.max(1, el.clientHeight),
       background: 0x020308,
-      antialias: true,
+      // MSAA costs a lot of fill rate on phones; the art is soft anyway.
+      antialias: this.view === "tv",
       autoDensity: true,
       // Phones: 1.5x is visually close to native and much cheaper for the GPU.
-      resolution: Math.min(window.devicePixelRatio || 1, this.view === "tv" ? 2 : 1.5),
+      resolution: this.targetResolution(),
       preference: "webgl",
       powerPreference: "high-performance",
     });
@@ -97,6 +110,28 @@ export class GameRenderer {
       return;
     }
     el.appendChild(this.app.canvas);
+    // Resize from inside our own frame (not Pixi's resizeTo, which renders one frame before
+    // the light map catches up): container size changes, rotation, and DPR changes
+    // (window moved to another monitor, browser zoom).
+    const ro = new ResizeObserver(() => (this.needsResize = true));
+    ro.observe(el);
+    this.unsubs.push(() => ro.disconnect());
+    let mq: MediaQueryList | null = null;
+    const watchDpr = () => {
+      mq?.removeEventListener("change", onDpr);
+      mq = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+      mq.addEventListener("change", onDpr);
+    };
+    const onDpr = () => {
+      this.needsResize = true;
+      watchDpr();
+    };
+    watchDpr();
+    this.unsubs.push(() => mq?.removeEventListener("change", onDpr));
+    // iOS drops the GPU context when you switch apps; rebuild baked art when it comes back.
+    const restored = () => requestAnimationFrame(() => this.maze?.rebake());
+    this.app.canvas.addEventListener("webglcontextrestored", restored);
+    this.unsubs.push(() => this.app.canvas.removeEventListener("webglcontextrestored", restored));
     this.lighting = new Lighting(this.app.renderer, this.view === "tv" ? 0.5 : 0.5);
 
     this.world.addChild(this.floorLayer, this.decalLayer, this.wallLayer, this.entityLayer);
@@ -116,6 +151,9 @@ export class GameRenderer {
   destroy() {
     this.destroyed = true;
     this.unsubs.forEach((u) => u());
+    this.unfeed?.();
+    this.unfeed = null;
+    this.boundRoom = null;
     if (!this.ready) return;
     this.clearRound();
     this.lighting.destroy();
@@ -125,8 +163,12 @@ export class GameRenderer {
 
   // ------------------------------------------------------------------ state feed
 
+  private unfeed: (() => void) | null = null;
+
   private bindRoom(r: Room<GameState> | null) {
     if (r === this.boundRoom) return;
+    this.unfeed?.();
+    this.unfeed = null;
     this.boundRoom = r;
     if (!r) return;
     const feed = (s: GameState) => {
@@ -136,6 +178,7 @@ export class GameRenderer {
       s.decoys.forEach((d) => this.interp.push(`decoy:${d.id}`, t, d.x, d.y, d.vx, d.vy, Math.atan2(d.vy, d.vx)));
     };
     r.onStateChange(feed);
+    this.unfeed = () => r.onStateChange.remove(feed);
   }
 
   private get me(): Player | null {
@@ -152,7 +195,7 @@ export class GameRenderer {
     this.decoys.forEach((c) => c.destroy());
     this.decoys.clear();
     for (const m of [this.orbs, this.items, this.smokes, this.flares, this.traps] as Map<number, any>[]) {
-      m.forEach((v) => (v.core ? (v.core.destroy(), v.glow.destroy()) : v.destroy({ children: true })));
+      m.forEach((v) => (v.core ? (v.core.destroy(), v.glow.destroy(), v.ring?.destroy()) : v.destroy({ children: true })));
       m.clear();
     }
     this.footprints.forEach((f) => f.s.destroy());
@@ -175,7 +218,10 @@ export class GameRenderer {
     round.rects.forEach((r) => rects.push({ x: r.x, y: r.y, w: r.w, h: r.h }));
     const lockers: { x: number; y: number; dir: number }[] = [];
     round.lockers.forEach((l) => lockers.push({ x: l.x, y: l.y, dir: l.dir }));
-    this.maze = new MazeView({ width: round.width, height: round.height, rects, wallCount: round.wallCount, lockers });
+    this.maze = new MazeView(
+      { width: round.width, height: round.height, rects, wallCount: round.wallCount, lockers },
+      this.view === "tv" ? Math.min(2, this.app.renderer.resolution) : 1,
+    );
     this.floorLayer.addChild(this.maze.floor);
     this.wallLayer.addChild(this.maze.walls);
     this.memoryLayer.addChild(this.maze.memory);
@@ -187,23 +233,48 @@ export class GameRenderer {
 
   // ------------------------------------------------------------------ frame
 
+  private targetResolution() {
+    const cap = this.view === "tv" ? 2 : 1.5; // phones: 1.5x looks native and costs far less
+    return this.perf.low ? 1 : Math.min(window.devicePixelRatio || 1, cap);
+  }
+
+  private applySize() {
+    if (!this.needsResize || !this.host) return;
+    this.needsResize = false;
+    const w = Math.max(1, this.host.clientWidth);
+    const h = Math.max(1, this.host.clientHeight);
+    const res = this.targetResolution();
+    const r = this.app.renderer;
+    if (w !== this.app.screen.width || h !== this.app.screen.height || res !== r.resolution) r.resize(w, h, res);
+  }
+
+  /**
+   * Adaptive quality: drop to 1x when the device really struggles (< ~22 fps), go back up
+   * once it's comfortably smooth. A steady 30 fps cap (battery saver, some TVs) isn't "slow".
+   */
   private adaptQuality(dt: number) {
     const p = this.perf;
     p.frames++;
-    if (dt > 1 / 40) p.slow++;
+    if (dt > 0.045) p.slow++;
+    if (dt < 0.02) p.fast++;
     if (this.time < p.checkAt) return;
-    p.checkAt = this.time + 3;
-    const r = this.app.renderer;
-    if (p.frames > 30 && p.slow / p.frames > 0.5 && r.resolution > 1) {
-      r.resize(this.app.screen.width, this.app.screen.height, 1);
+    p.checkAt = this.time + (p.low ? 8 : 3);
+    if (p.frames > 30) {
+      if (!p.low && p.slow / p.frames > 0.5 && this.app.renderer.resolution > 1) {
+        p.low = true;
+        this.needsResize = true;
+      } else if (p.low && p.fast / p.frames > 0.9) {
+        p.low = false;
+        this.needsResize = true;
+      }
     }
-    p.frames = 0;
-    p.slow = 0;
+    p.frames = p.slow = p.fast = 0;
   }
 
   private frame(dt: number) {
     this.time += dt;
     this.adaptQuality(dt);
+    this.applySize();
     const W = this.app.screen.width;
     const H = this.app.screen.height;
     const s = getRoom()?.state;
@@ -261,13 +332,14 @@ export class GameRenderer {
     let myPoly: Vec[] | null = null;
     if (phase === "hunt" && seeker && sp && !seeker.blinded) {
       const cone = seekerCone(sp, sp.a, occ);
-      const aura = circleLight(sp, VISION.auraRadius * 1.6, occ, 40);
+      const aura = circleLight(sp, VISION.auraRadius * 1.25, occ, 40);
       conePoly = cone.points;
       this.lighting.add({ key: "cone", center: sp, rim: cone.points.slice(1), radius: VISION.coneRange, color: COLORS.cone, alpha: seekerView ? 1 : 0.85, closed: false });
-      this.lighting.add({ key: "aura", center: sp, rim: aura.points, radius: VISION.auraRadius * 1.6, color: COLORS.aura, alpha: 0.75, closed: true });
+      this.lighting.add({ key: "aura", center: sp, rim: aura.points, radius: VISION.auraRadius * 1.25, color: COLORS.aura, alpha: 0.75, closed: true });
       if (seekerView) maze.remember(cone.hitRects.concat(aura.hitRects));
     }
-    if (phase === "hunt" || phase === "scatter") {
+    // In scatter the TV/seeker stays dark: lit orbs would show where runners went.
+    if (phase === "hunt" || (phase === "scatter" && !seekerView)) {
       s.orbs.forEach((o) => {
         const l = circleLight(o, VISION.orbLight, occ, 24);
         this.lighting.add({ key: `orb${o.id}`, center: o, rim: l.points, radius: VISION.orbLight, color: COLORS.orb, alpha: 0.75, closed: true });
@@ -288,6 +360,7 @@ export class GameRenderer {
       myPoly = l.points;
       this.lighting.add({ key: "me", center: mp, rim: l.points, radius: VISION.runnerLight, color: COLORS.runnerLight, alpha: 0.9, closed: true });
     }
+    this.visCone = conePoly;
     maze.setShowAll(!seekerView && phase === "hunt");
     maze.updateMemory();
     this.memoryLayer.visible = phase === "hunt" && !ghostView;
@@ -321,7 +394,7 @@ export class GameRenderer {
       if (!bodyVisible) labelVisible = false;
       else if (isMe || reveal || caged || bright || ghostView) labelVisible = true;
       else if (p.role === "seeker") labelVisible = true; // carries its own light
-      else if (seekerView) labelVisible = p.lit || (!!conePoly && pointInPolygon(pp, conePoly)) || this.nearLight(pp, s);
+      else if (seekerView) labelVisible = p.lit || (!!conePoly && pointInPolygon(pp, conePoly)) || (phase === "hunt" && this.nearLight(pp, s));
       else labelVisible = (!!myPoly && pointInPolygon(pp, myPoly)) || this.nearLight(pp, s) || (!!conePoly && pointInPolygon(pp, conePoly));
       c.label.visible = labelVisible;
       c.update(dt, pp.x, pp.y, pp.vx, pp.vy, pp.a, { exposure: p.exposure, rescue: p.rescue, invuln: p.invuln });
@@ -350,11 +423,13 @@ export class GameRenderer {
       layer.scale.set(z);
       layer.position.set(-left * z + ox, -top * z + oy);
     }
-    this.lighting.sprite.position.set(ox, oy);
-    this.lighting.haze.position.set(ox, oy);
+    // The light map always covers the screen; shake moves its camera instead of the sprite
+    // (moving the sprite would uncover a strip of unlit world at the edge).
+    this.lighting.sprite.position.set(0, 0);
+    this.lighting.haze.position.set(0, 0);
     // Haze only where it reads as light in the dark, not over a lit lobby.
     this.lighting.haze.visible = !bright;
-    this.lighting.end(left, top, z);
+    this.lighting.end(left - ox / z, top - oy / z, z);
   }
 
   private nearLight(p: Vec, s: GameState): boolean {
@@ -669,8 +744,18 @@ export class GameRenderer {
 
   // ------------------------------------------------------------------ fx
 
+  /** Can a seeker view see this spot right now (cone, lights)? Runner-made effects elsewhere stay hidden. */
+  private seekerCanSee(x: number, y: number): boolean {
+    const s = getRoom()?.state;
+    const p = { x, y };
+    if (this.visCone && pointInPolygon(p, this.visCone)) return true;
+    return !!s && this.nearLight(p, s);
+  }
+
   private handleFx(events: FxEvent[]) {
     if (!this.ready) return;
+    // Effects only animate on visible frames; don't pile them up while the phone is locked.
+    if (document.visibilityState !== "visible") return;
     const s = getRoom()?.state;
     const me = this.me;
     const seekerView = this.view === "tv" || me?.role === "seeker";
@@ -730,10 +815,13 @@ export class GameRenderer {
           } else fx.text(e.x, e.y, "+1", 0xffd23f, 20);
           break;
         case "item":
+          if (seekerView && me?.id !== e.id && !this.seekerCanSee(e.x, e.y)) break;
           fx.burst(e.x, e.y, { count: 18, color: COLORS.item, speed: 160, life: 0.6, size: 9 });
           if (me?.id === e.id) fx.text(e.x, e.y, e.item.toUpperCase(), COLORS.item, 20);
           break;
         case "use":
+          // A runner dashing or popping smoke in the dark must not light up on the TV.
+          if (seekerView && me?.id !== e.id && e.item !== "sprint" && e.item !== "flare" && e.item !== "trap" && !this.seekerCanSee(e.x, e.y)) break;
           if (e.item === "dash") fx.burst(e.x, e.y, { count: 12, color: 0xa7f3d0, speed: 140, life: 0.4, size: 9 });
           if (e.item === "sprint") fx.burst(e.x, e.y, { count: 14, color: 0xff8a3d, speed: 120, life: 0.5, size: 8 });
           if (e.item === "decoy") fx.burst(e.x, e.y, { count: 16, color: 0xb46bff, speed: 120, life: 0.5, size: 8 });
@@ -741,6 +829,7 @@ export class GameRenderer {
           if (e.item === "flare" && seekerView) fx.text(e.x, e.y, "FLARE", COLORS.flare, 18);
           break;
         case "flash":
+          if (seekerView && !e.hit && !this.seekerCanSee(e.x, e.y)) break;
           fx.burst(e.x, e.y, { count: 30, color: 0xffffff, speed: 320, life: 0.5, size: 14, texture: tex.spark });
           fx.ring(e.x, e.y, 0xffffff, ITEMS.flash.range, 0.6, 8);
           if (e.hit && seekerView) fx.flash(0xffffff, 0.92, 1.4);

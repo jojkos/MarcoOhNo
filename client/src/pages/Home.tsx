@@ -117,8 +117,9 @@ export function Home() {
     const rooms = recentRooms();
     Promise.all(rooms.map(async (room) => ({ room, status: await roomStatus(room.code) }))).then((list) => {
       if (!alive) return;
-      list.filter((r) => !r.status.exists).forEach((r) => forgetRoom(r.room.code));
-      setRecent(list.filter((r) => r.status.exists));
+      // Only forget rooms the server says are gone; a network hiccup proves nothing.
+      list.filter((r) => r.status.exists === false).forEach((r) => forgetRoom(r.room.code));
+      setRecent(list.filter((r) => r.status.exists !== false));
     });
     return () => {
       alive = false;
@@ -140,7 +141,7 @@ export function Home() {
       <div className="flex flex-col items-center text-center animate-rise-in">
         <Logo />
         <p className="mt-6 max-w-md text-lg text-muted-foreground">
-          Hide-and-seek in the dark for 3 to 8 friends. The TV shows the seeker's flashlight, and your phone is your controller.
+          Hide-and-seek in the dark for 2 to 8 friends (3+ is best). The TV shows the seeker's flashlight, and your phone is your controller.
         </p>
       </div>
 

@@ -4,7 +4,7 @@ import { abilityAllowed, abilityFor, baseSpeed, isFrozen } from "@shared/rules";
 import type { Rect } from "@shared/geometry";
 import type { Phase, Player } from "@shared/schema";
 import { send } from "@/lib/session";
-import { readMove, takePresses } from "./input";
+import { input, readMove, takePresses } from "./input";
 
 /**
  * The phone's own character. Moves instantly on this device (no waiting for
@@ -39,12 +39,12 @@ export class LocalMover {
     this.ready = true;
   }
 
+  /** Server rejected a move: jump to its position (visually eased), keep momentum. */
   correct(x: number, y: number) {
     this.errX += this.x - x;
     this.errY += this.y - y;
     this.x = x;
     this.y = y;
-    this.vx = this.vy = 0;
   }
 
   /** Visual position (with any correction easing out). */
@@ -117,11 +117,18 @@ export class LocalMover {
       this.angle = me.role === "seeker" ? turnTowards(this.angle, target, PLAYER.seekerTurnRate, dt) : target;
     }
 
-    // Report position at a fixed rate (slower when idle).
+    input.selfX = this.x;
+    input.selfY = this.y;
+
+    // Frozen players are moved by the server; reporting would only earn corrections.
+    if (frozen) return;
+    // Report position at a steady rate (slower when idle). Keep the remainder so 60 Hz
+    // frames give an even 30 Hz, not a 20/30 Hz mix that stutters on other screens.
     this.sendAcc += dt;
     this.idleSendAcc += dt;
     if (this.sendAcc >= 1 / MOVE_SEND_HZ) {
-      this.sendAcc = 0;
+      this.sendAcc -= 1 / MOVE_SEND_HZ;
+      if (this.sendAcc > 1 / MOVE_SEND_HZ) this.sendAcc = 0;
       const moved = this.x !== this.lastSent.x || this.y !== this.lastSent.y || Math.abs(this.angle - this.lastSent.a) > 0.01;
       if (moved || this.idleSendAcc > 0.25) {
         this.idleSendAcc = 0;

@@ -82,7 +82,7 @@ export const RULES = {
 
   helpCooldownMs: 6000,
 
-  lobbyDropMs: 20000,
+  lobbyDropMs: 45000, // longer than the reconnect window, so a reconnecting phone finds its seat
   reconnectWindowSec: 40,
   seekerDropAbortMs: 30000,
   roomIdleMs: 10 * 60 * 1000,

@@ -133,9 +133,19 @@ export function lightPolygon(o: Vec, facing: number, arc: number, range: number,
   const hitRects: number[] = [];
   const start = facing - arc / 2;
   const step = arc / (full ? rays : rays - 1);
+  // Broadphase: only rects within range can stop a ray (typically a handful of ~100).
+  const near: Rect[] = [];
+  const nearIdx: number[] = [];
+  occ.rects.forEach((r, i) => {
+    if (r.x > o.x + range || r.x + r.w < o.x - range || r.y > o.y + range || r.y + r.h < o.y - range) return;
+    near.push(r);
+    nearIdx.push(i);
+  });
+  const local: Occluders = { rects: near, circles: occ.circles };
   for (let i = 0; i < rays; i++) {
     const ang = start + step * i;
-    const hit = castRay(o, ang, range, occ);
+    const h = castRay(o, ang, range, local);
+    const hit = { dist: h.dist, rect: h.rect >= 0 ? nearIdx[h.rect] : -1 };
     // Push a few px into walls so their faces get lit.
     const d = hit.rect >= 0 ? Math.min(range, hit.dist + 5) : hit.dist;
     points.push({ x: o.x + Math.cos(ang) * d, y: o.y + Math.sin(ang) * d });

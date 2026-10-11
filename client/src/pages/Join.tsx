@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { navigate } from "wouter/use-browser-location";
 import { UserRound, Loader2, CheckCircle2, AlertTriangle, Hourglass } from "lucide-react";
 import type { RoomStatus } from "@shared/protocol";
@@ -22,6 +22,12 @@ function StatusLine({ code, status }: { code: string; status: RoomStatus | null 
         <Loader2 className="h-4 w-4 animate-spin" /> Looking for room…
       </p>
     );
+  if (status.exists === undefined)
+    return (
+      <p className="flex h-5 items-center gap-2 text-sm text-muted-foreground" data-testid="text-room-status">
+        <Hourglass className="h-4 w-4" /> Couldn't check the room (server waking up?). You can still try.
+      </p>
+    );
   if (!status.exists)
     return (
       <p className="flex h-5 items-center gap-2 text-sm text-neon-red" data-testid="text-room-status">
@@ -31,7 +37,8 @@ function StatusLine({ code, status }: { code: string; status: RoomStatus | null 
   if (!status.joinable)
     return (
       <p className="flex h-5 items-center gap-2 text-sm text-neon-gold" data-testid="text-room-status">
-        <Hourglass className="h-4 w-4" /> Round in progress: you can join when it ends
+        <Hourglass className="h-4 w-4" />{" "}
+        {status.phase === "lobby" || status.phase === "round_over" ? "This room is full" : "Round in progress: you can join when it ends"}
       </p>
     );
   return (
@@ -51,6 +58,13 @@ export function Join({ initialCode }: { initialCode?: string }) {
   const [busy, setBusy] = useState(false);
   const [asNew, setAsNew] = useState(false);
   const seat = code.length === 4 ? seatFor(code) : null;
+  const mounted = useRef(true);
+  useEffect(
+    () => () => {
+      mounted.current = false;
+    },
+    [],
+  );
 
   useEffect(() => {
     setError(null);
@@ -68,13 +82,14 @@ export function Join({ initialCode }: { initialCode?: string }) {
     setBusy(true);
     setError(null);
     saveFace(face);
-    const res = await joinRoom(code, name.trim(), face);
+    const res = await joinRoom(code, name.trim(), face, () => !mounted.current);
+    if (!mounted.current) return;
     setBusy(false);
     if (res.ok) navigate(`/play/${res.code}`, { replace: true });
     else setError(res.error);
   };
 
-  const canJoin = code.length === 4 && name.trim().length > 0 && !busy && status !== "loading" && (status === null || status.exists);
+  const canJoin = code.length === 4 && name.trim().length > 0 && !busy && status !== "loading" && (status === null || status.exists !== false);
 
   return (
     <Screen className="mx-auto flex max-w-md flex-col gap-6 py-6" beam={false}>

@@ -96,8 +96,11 @@ describe("rooms over the network", () => {
     const { tv, code } = await hostRoom();
     const a = await joinPlayer(code, { name: "Dan" });
     const kicked = new Promise<string>((resolve) => a.room.onMessage("kicked", resolve));
+    // Closed for good (consented), so the old tab doesn't auto-reconnect and steal it back.
+    const closed = new Promise<number>((resolve) => a.room.onLeave(resolve));
     const b = await joinPlayer(code, { seatToken: a.seat.seatToken });
     expect(await kicked).toMatch(/another tab/);
+    expect(await closed).toBe(4000);
     expect(b.seat.playerId).toBe(a.seat.playerId);
     await b.room.leave();
     await tv.leave();

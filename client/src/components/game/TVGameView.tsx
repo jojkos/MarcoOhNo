@@ -17,6 +17,8 @@ export function TVGameView() {
   const seeker = view.players.find((p) => p.id === round.seekerId);
   const lowTime = phase === "hunt" && view.phaseLeft < 20000;
 
+  const inRound = view.players.filter((p) => p.inRound);
+  const compact = inRound.length > 5;
   return (
     <div className="relative h-full w-full overflow-hidden bg-black">
       <GameCanvas view="tv" />
@@ -26,13 +28,12 @@ export function TVGameView() {
       )}
 
       <div className="absolute inset-x-0 top-0 z-20 flex h-[104px] items-center justify-between gap-6 bg-gradient-to-b from-black via-black/85 to-transparent px-6 pb-3">
-        <div className="flex min-w-0 flex-1 flex-wrap gap-2">
-          {view.players
-            .filter((p) => p.inRound)
-            .map((p) => (
-              <div key={p.id} className={cn("glass flex items-center gap-2 rounded-full py-1 pl-1 pr-3", (p.status === "ghost" || p.status === "caged") && "opacity-55")}>
+        {/* Many players: compact chips (face + status) so the bar never grows past the HUD height. */}
+        <div className="flex max-h-[92px] min-w-0 flex-1 flex-wrap content-center gap-2 overflow-hidden">
+          {inRound.map((p) => (
+              <div key={p.id} title={p.name} className={cn("glass flex items-center gap-2 rounded-full py-1 pl-1", compact ? "pr-2" : "pr-3", (p.status === "ghost" || p.status === "caged") && "opacity-55")}>
                 <Blob color={p.color} face={p.face} size={28} seeker={p.role === "seeker"} glow={false} dim={!p.connected} />
-                <span className="text-sm font-semibold">{p.name}</span>
+                {!compact && <span className="max-w-[9rem] truncate text-sm font-semibold">{p.name}</span>}
                 <StatusIcon p={p} connected={p.connected} />
               </div>
             ))}

@@ -156,7 +156,7 @@ export function TVLobby() {
                 </p>
               </>
             ) : (
-              <p className="text-muted-foreground">The host's screen starts the game.</p>
+              <p className="text-muted-foreground">The TV or the first player's phone starts the game.</p>
             )}
           </div>
         </div>

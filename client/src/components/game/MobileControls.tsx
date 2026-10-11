@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Megaphone, Zap, Wind, Ghost, Siren, Cloud, Copy, Sun, Flame, Target, DoorOpen, DoorClosed, Search, type LucideIcon } from "lucide-react";
 import { RULES } from "@shared/config";
 import { abilityCooldown, abilityFor, type Ability } from "@shared/rules";
@@ -95,11 +95,24 @@ function Joystick() {
     input.joyY = 0;
   };
 
+  // Unmounting mid-drag (hiding in a locker, round over) or losing the touch to the OS
+  // must never leave the character walking on its own.
+  useEffect(() => {
+    const onRelease = () => pointer.current !== null && end();
+    window.addEventListener("mo:release", onRelease);
+    return () => {
+      window.removeEventListener("mo:release", onRelease);
+      input.joyX = 0;
+      input.joyY = 0;
+    };
+  }, []);
+
   return (
     <div
       className="absolute bottom-0 left-0 top-16 w-[58%] touch-none select-none"
       onPointerDown={(e) => {
-        if (pointer.current !== null) return;
+        // A previous touch whose "up" got lost (system gesture) doesn't block new ones.
+        if (pointer.current !== null && e.currentTarget.hasPointerCapture(pointer.current)) return;
         pointer.current = e.pointerId;
         e.currentTarget.setPointerCapture(e.pointerId);
         origin.current = { x: e.clientX, y: e.clientY };
@@ -112,6 +125,7 @@ function Joystick() {
       }}
       onPointerUp={(e) => e.pointerId === pointer.current && end()}
       onPointerCancel={(e) => e.pointerId === pointer.current && end()}
+      onLostPointerCapture={(e) => e.pointerId === pointer.current && end()}
       data-testid="control-joystick"
     >
       <div
@@ -200,9 +214,12 @@ function contextAction(me: PlayerView): "hide" | "leave" | "search" | null {
   }
   const lockers = getRoom()?.state.round?.lockers;
   if (!lockers) return null;
+  // Use where the character is on this screen right now, not the (older) server copy.
+  const x = Number.isFinite(input.selfX) ? input.selfX : me.x;
+  const y = Number.isFinite(input.selfY) ? input.selfY : me.y;
   let near = false;
   lockers.forEach((l) => {
-    if (Math.hypot(l.x - me.x, l.y - me.y) <= RULES.lockerRange && !(me.role === "seeker" && l.checked)) near = true;
+    if (Math.hypot(l.x - x, l.y - y) <= RULES.lockerRange && !(me.role === "seeker" && l.checked)) near = true;
   });
   if (!near) return null;
   return me.role === "seeker" ? "search" : "hide";
@@ -212,7 +229,9 @@ export function MobileControls({ me, hunt }: { me: PlayerView; hunt: boolean }) 
   const a = abilityFor(me.role, me.status, "a");
   const b = abilityFor(me.role, me.status, "b");
   const act = hunt ? contextAction(me) : null;
-  const item = me.item ? ITEM_UI[me.item] : undefined;
+  // Items work only while you're out and about (the server ignores them in cages/lockers).
+  const canUseItem = me.locker < 0 && (me.role === "seeker" || me.status === "free");
+  const item = me.item && canUseItem ? ITEM_UI[me.item] : undefined;
   return (
     <>
       {me.locker < 0 && <Joystick />}

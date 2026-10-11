@@ -98,6 +98,8 @@ export class Lighting {
   private layer = new Container();
   private meshes = new Map<string, LightMesh>();
   private used = new Set<string>();
+  /** Frames since each light was last used; long-unused ones are freed. */
+  private idle = new Map<string, number>();
   private blur: BlurFilter;
   ambient = 0x000000;
 
@@ -145,19 +147,31 @@ export class Lighting {
       this.meshes.set(spec.key, m);
       this.layer.addChild(m.mesh);
     }
-    m.set(spec.center, spec.rim, spec.radius, spec.color, spec.alpha, spec.bleed ?? 18);
+    m.set(spec.center, spec.rim, spec.radius, spec.color, spec.alpha, spec.bleed ?? 4);
     this.used.add(spec.key);
   }
 
   /** Render lights into the map. `camX/camY/zoom` = world->screen transform. */
   end(camX: number, camY: number, zoom: number) {
     for (const [key, m] of this.meshes) {
-      if (!this.used.has(key)) m.mesh.visible = false;
+      if (this.used.has(key)) {
+        this.idle.delete(key);
+        continue;
+      }
+      m.mesh.visible = false;
+      // Orbs/items/flares get new ids all evening: free lights gone for ~2 s.
+      const n = (this.idle.get(key) ?? 0) + 1;
+      if (n > 120) {
+        m.mesh.destroy();
+        this.meshes.delete(key);
+        this.idle.delete(key);
+      } else this.idle.set(key, n);
     }
     const r = this.resolution;
     this.layer.scale.set(zoom * r);
     this.layer.position.set(-camX * zoom * r, -camY * zoom * r);
-    this.blur.strength = Math.max(2, 7 * zoom * r * 2);
+    // ~10 world px of softness: with the ~9 px light bleed into walls it stays inside a 24 px wall.
+    this.blur.strength = Math.max(2, 5 * zoom * r * 2);
     this.renderer.render({ container: this.layer, target: this.rt, clear: true, clearColor: this.ambient });
   }
 

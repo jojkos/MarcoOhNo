@@ -1,4 +1,4 @@
-import { ABILITIES, PLAYER } from "./config";
+import { ABILITIES, RULES, PLAYER } from "./config";
 import type { Phase, Role, Status } from "./schema";
 
 export type Ability = "polo" | "sprint" | "dash" | "boo" | "help";
@@ -27,7 +27,7 @@ export function abilityCooldown(ability: Ability): number {
     case "boo":
       return ABILITIES.boo.cooldownMs;
     case "help":
-      return 6000;
+      return RULES.helpCooldownMs;
   }
 }
 

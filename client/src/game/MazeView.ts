@@ -27,7 +27,11 @@ export class MazeView {
   private memoryDirty = true;
   private showAll = false;
 
-  constructor(private m: MazeInput) {
+  /** `cacheResolution`: resolution of the baked wall texture (lower on phones to save GPU memory). */
+  constructor(
+    private m: MazeInput,
+    cacheResolution = 1,
+  ) {
     const tex = textures();
     this.floor = new Container();
     const tiles = new TilingSprite({ texture: tex.floor, width: m.width, height: m.height });
@@ -35,7 +39,7 @@ export class MazeView {
     // Darken the outside rim.
     const rim = new Graphics().rect(0, 0, m.width, m.height).stroke({ width: 30, color: 0x000000, alpha: 0.5 });
     this.floor.addChild(rim);
-    this.floor.cacheAsTexture(true);
+    // Not baked: a tiling sprite is already cheap, and a baked floor would be a huge texture.
 
     this.walls = new Container();
     const glow = new Graphics();
@@ -73,7 +77,12 @@ export class MazeView {
       lockers.addChild(g);
     }
     this.walls.addChild(glow, faces, tops, edges, lockers);
-    this.walls.cacheAsTexture(true);
+    this.walls.cacheAsTexture({ resolution: cacheResolution });
+  }
+
+  /** After a lost-and-restored GPU context the baked texture is gone: bake it again. */
+  rebake() {
+    this.walls.updateCacheTexture();
   }
 
   /** Seeker views remember walls their light touched; runners know the whole maze. */

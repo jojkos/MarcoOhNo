@@ -51,10 +51,12 @@ interface Private {
   searchLocker: number;
   searchMs: number;
   lockerMs: number;
-  helpCdMs: number;
   idleMs: number;
   idleAnchor: Vec;
   timesCaught: number;
+  /** Rescue progress supplied by teammates (vs lockpicking), and who helped last. */
+  helped: number;
+  lastRescuer: string;
   stats: Stats;
 }
 
@@ -92,6 +94,7 @@ export class Game {
   private decoyExposure = new Map<number, number>();
   private poloLeft = 0;
   private huntElapsed = 0;
+  private lastSeekerId = "";
   private orbCharge = new Map<number, number>();
   private orbTimers: number[] = [];
   /** Recent noises/pings, for bots to "hear". */
@@ -137,8 +140,17 @@ export class Game {
   }
 
   /** Disconnected seat with this name – lets a player who lost their token reclaim it. */
-  reclaimable(name: string): Player | undefined {
-    return this.players.find((p) => !p.connected && !p.isBot && p.name.toLowerCase() === name.toLowerCase());
+  /**
+   * A seat someone can take back by typing its name (lost token: other phone, private tab).
+   * Never a seat its owner gave up, and not while that phone is still auto-reconnecting
+   * (`reconnecting(id)`), so a phone that just blipped can't be hijacked.
+   */
+  reclaimable(name: string, reconnecting: (playerId: string) => boolean = () => false): Player | undefined {
+    return this.players.find((p) => {
+      const pr = this.priv.get(p.id);
+      if (p.connected || p.isBot || !pr || pr.left || p.name.toLowerCase() !== name.toLowerCase()) return false;
+      return pr.offlineMs > RULES.reconnectWindowSec * 1000 || !reconnecting(p.id);
+    });
   }
 
   joinError(name: string): "in_progress" | "full" | "name_taken" | null {
@@ -173,10 +185,11 @@ export class Game {
       searchLocker: -1,
       searchMs: 0,
       lockerMs: 0,
-      helpCdMs: 0,
       idleMs: 0,
       idleAnchor: { x: 0, y: 0 },
       timesCaught: 0,
+      helped: 0,
+      lastRescuer: "",
       stats: freshStats(),
     });
     if (isBot) this.bots.set(id, new BotBrain(id, this));
@@ -192,6 +205,8 @@ export class Game {
   }
 
   removeBot(): boolean {
+    // Mid-round the bot may be the seeker or hiding in a locker: only between rounds.
+    if (this.state.phase !== "lobby" && this.state.phase !== "round_over") return false;
     const bot = [...this.players].reverse().find((p) => p.isBot);
     if (!bot) return false;
     this.removeSeat(bot.id);
@@ -213,6 +228,8 @@ export class Game {
   }
 
   private removeSeat(id: string) {
+    const p = this.player(id);
+    if (p) this.exitLocker(p, false);
     this.state.players.delete(id);
     this.priv.delete(id);
     this.bots.delete(id);
@@ -251,8 +268,18 @@ export class Game {
     const minTurns = Math.min(...players.map((p) => p.timesSeeker));
     let pool = players.filter((p) => p.timesSeeker === minTurns);
     if (pool.some((p) => !p.isBot)) pool = pool.filter((p) => !p.isBot);
+    // Never the same seeker twice in a row when there's a choice.
+    const prev = this.lastSeekerId;
+    if (pool.length > 1 && pool.some((p) => p.id === prev)) pool = pool.filter((p) => p.id !== prev);
+    else if (pool.length === 1 && pool[0].id === prev && players.length > 1) {
+      const others = players.filter((p) => p.id !== prev);
+      const minOther = Math.min(...others.map((p) => p.timesSeeker));
+      pool = others.filter((p) => p.timesSeeker === minOther);
+      if (pool.some((p) => !p.isBot)) pool = pool.filter((p) => !p.isBot);
+    }
     const seeker = pool[Math.floor(this.rng() * pool.length)];
     seeker.timesSeeker++;
+    this.lastSeekerId = seeker.id;
 
     const map = generateMap(players.length, this.rng);
     this.map = map;
@@ -318,10 +345,11 @@ export class Game {
         searchLocker: -1,
         searchMs: 0,
         lockerMs: 0,
-        helpCdMs: 0,
         idleMs: 0,
         idleAnchor: { x: p.x, y: p.y },
         timesCaught: 0,
+        helped: 0,
+        lastRescuer: "",
         stats: freshStats(),
       });
     }
@@ -453,6 +481,7 @@ export class Game {
     if (p.locker >= 0 && ability !== "polo") return;
     const cdKey = slot === "a" ? "cdA" : "cdB";
     if (p[cdKey] > 0) return;
+    if (ability === "dash" && p.rooted) return; // don't burn the cooldown while trapped
     p[cdKey] = abilityCooldown(ability);
     const now = this.hooks.now();
 
@@ -471,7 +500,8 @@ export class Game {
         this.pending.push({ k: "use", id, item: "sprint", x: p.x, y: p.y });
         break;
       case "polo": {
-        const targets = this.runners.filter((r) => r.status === "free");
+        // Hidden in a locker = silent; that's the point of hiding.
+        const targets = this.runners.filter((r) => r.status === "free" && r.locker < 0);
         const { jitter } = ABILITIES.polo;
         const pings = targets.map((r) => {
           const a = this.rng() * Math.PI * 2;
@@ -635,7 +665,6 @@ export class Game {
       const pr = this.priv.get(p.id)!;
       p.cdA = Math.max(0, p.cdA - dtMs);
       p.cdB = Math.max(0, p.cdB - dtMs);
-      pr.helpCdMs = Math.max(0, pr.helpCdMs - dtMs);
       if (pr.boostMs > 0) {
         pr.boostMs -= dtMs;
         if (pr.boostMs <= 0) p.boost = 1;
@@ -786,8 +815,11 @@ export class Game {
         r.exposure += (dt / RULES.exposureFillFor(runners.length)) * (inBeam ? 1 : RULES.flareExposureScale);
         pr.stats.peak = Math.max(pr.stats.peak, r.exposure);
         if (r.exposure >= 1) {
-          this.catchRunner(r, seeker!);
-          continue;
+          if (seeker) {
+            this.catchRunner(r, seeker);
+            continue;
+          }
+          r.exposure = 1;
         }
       } else {
         r.exposure = Math.max(0, r.exposure - dt / RULES.exposureDecaySec);
@@ -857,10 +889,9 @@ export class Game {
       orb.charge = Math.round(c * 100);
     }
     this.orbTimers = this.orbTimers.map((t) => t - dtMs);
-    if (this.orbTimers.some((t) => t <= 0)) {
-      this.orbTimers = this.orbTimers.filter((t) => t > 0);
-      this.fillOrbs();
-    }
+    this.orbTimers = this.orbTimers.filter((t) => t > 0);
+    // Top up (also retries if a spot couldn't be found earlier).
+    if (Math.floor(this.huntElapsed / 1000) !== Math.floor((this.huntElapsed - dtMs) / 1000) || !s.orbs.length) this.fillOrbs();
 
     // Item boxes (anyone in the round can grab one if their hands are free)
     for (const p of this.players) {
@@ -886,9 +917,20 @@ export class Game {
         (r) => r.status === "free" && r.locker < 0 && r !== caged && dist(r, caged) <= RULES.rescueRadius,
       );
       // A teammate frees you in seconds; alone you slowly pick the lock.
-      caged.rescue += dt / (rescuer ? RULES.rescueSec : RULES.lockpickSec);
+      const cpr = this.priv.get(caged.id)!;
+      const step = dt / (rescuer ? RULES.rescueSec : RULES.lockpickSec);
+      caged.rescue += step;
+      if (rescuer) {
+        cpr.helped += step;
+        cpr.lastRescuer = rescuer.id;
+      }
       if (caged.rescue >= 1) {
-        const pr = this.priv.get(caged.id)!;
+        const pr = cpr;
+        // Credit a teammate only if they did a real share of the work.
+        const hero = pr.helped >= 0.4 ? this.player(pr.lastRescuer) : undefined;
+        pr.helped = 0;
+        pr.lastRescuer = "";
+        caged.cdA = 0;
         caged.status = "free";
         caged.rescue = 0;
         caged.exposure = 0;
@@ -896,13 +938,15 @@ export class Game {
         caged.invuln = true;
         pr.idleAnchor = { x: caged.x, y: caged.y };
         pr.idleMs = 0;
-        if (rescuer) this.priv.get(rescuer.id)!.stats.rescues++;
-        this.pending.push({ k: "freed", id: caged.id, by: rescuer?.id ?? caged.id, x: caged.x, y: caged.y });
+        if (hero) this.priv.get(hero.id)!.stats.rescues++;
+        this.pending.push({ k: "freed", id: caged.id, by: hero?.id ?? caged.id, x: caged.x, y: caged.y });
       }
     }
 
+    const stillHere = runners.filter((r) => !this.priv.get(r.id)?.left);
     if (s.collected >= round.orbsToWin) this.endRound("runners", "The runners collected every orb!");
-    else if (runners.length && !runners.some((r) => r.status === "free")) this.endRound("seeker", "Every runner is caught!");
+    else if (runners.length && !stillHere.length) this.endRound("aborted", "All the runners left");
+    else if (!stillHere.some((r) => r.status === "free")) this.endRound("seeker", "Every runner is caught!");
     else if (s.phaseLeft <= 0) this.endRound("seeker", "Time's up! The orbs weren't collected.");
   }
 
@@ -1006,6 +1050,8 @@ export class Game {
     pr.timesCaught++;
     r.exposure = 0;
     r.rescue = 0;
+    r.cdA = 0; // the slot becomes HELP/BOO: start it fresh
+    pr.helped = 0;
     r.rooted = false;
     pr.rootMs = 0;
     r.status = pr.timesCaught >= 2 ? "ghost" : "caged";
@@ -1047,7 +1093,7 @@ export class Game {
 
   private awards(): Award[] {
     const out: Award[] = [];
-    const runners = this.runners.map((p) => ({ p, st: this.priv.get(p.id)!.stats }));
+    const runners = this.runners.filter((p) => !this.priv.get(p.id)!.left).map((p) => ({ p, st: this.priv.get(p.id)!.stats }));
     const best = <T>(list: T[], score: (t: T) => number, min: number) => {
       let top: T | undefined;
       let topScore = min;

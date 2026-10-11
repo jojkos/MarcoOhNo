@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { navigate } from "wouter/use-browser-location";
 import { Loader2, DoorClosed, MonitorSmartphone, UserX } from "lucide-react";
 import { useGameStore } from "@/lib/gameStore";
-import { attachPlay, attachTv, createRoom, detach, retryAttach } from "@/lib/session";
+import { attachPlay, attachTv, createRoom, detach, retryAttach, seatGone } from "@/lib/session";
+import { useWakeLock } from "@/hooks/useWakeLock";
 import { forgetRoom, seatFor } from "@/lib/storage";
 import { useGameAudio } from "@/audio/useGameAudio";
 import { Btn, Notice, Screen } from "@/components/kit";
@@ -47,7 +48,11 @@ export function TvPage({ code }: { code: string }) {
       );
     }
     return (
-      <Notice icon={DoorClosed} title={`Room ${code} has ended`} text="Rooms close when everyone has been gone for a while, or when the server restarts.">
+      <Notice
+        icon={DoorClosed}
+        title={reason === "not_found" ? `Room ${code} has ended` : "Couldn't open this room"}
+        text={reason === "not_found" ? "Rooms close when everyone has been gone for a while, or when the server restarts." : message}
+      >
         <Btn
           tone="cyan"
           onClick={async () => {
@@ -77,6 +82,16 @@ export function PlayPage({ code }: { code: string }) {
   // Checked once on entry: a seat dropped later (room gone) shows an error instead.
   const [hasSeat] = useState(() => !!seatFor(code));
   useGameAudio("mobile");
+  useWakeLock();
+
+  // Attached and receiving state, but our player isn't in it (seat dropped while we were away).
+  const playerId = useGameStore((s) => s.playerId);
+  const missing = useGameStore((s) => !!s.view && !!s.playerId && s.attachment?.status === "attached" && !s.view.players.some((p) => p.id === s.playerId));
+  useEffect(() => {
+    if (!missing) return;
+    const t = setTimeout(seatGone, 2500);
+    return () => clearTimeout(t);
+  }, [missing, playerId]);
 
   useEffect(() => {
     if (!hasSeat) {

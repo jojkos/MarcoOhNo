@@ -28,6 +28,7 @@ let started = false;
 let mode: MusicMode = "off";
 let intensity = 0;
 let step = 0;
+let lastBpmTarget = 92;
 
 let nodes: {
   master: ToneTypes.Volume;
@@ -150,8 +151,12 @@ export function setMusic(next: MusicMode, nextIntensity = 0, finalStretch = fals
     step = 0;
     nodes.pad.releaseAll();
   }
-  const targetBpm = mode === "lobby" ? 92 : mode === "hunt" ? (finalStretch ? 134 : 108 + intensity * 10) : 100;
-  if (Math.abs(bpm.value - targetBpm) > 0.5) bpm.rampTo(targetBpm, 2);
+  const targetBpm = Math.round(mode === "lobby" ? 92 : mode === "hunt" ? (finalStretch ? 134 : 108 + intensity * 10) : 100);
+  // Called ~10x a second: only start a ramp when the target changes, or it never finishes.
+  if (targetBpm !== lastBpmTarget) {
+    lastBpmTarget = targetBpm;
+    bpm.rampTo(targetBpm, finalStretch ? 1 : 2);
+  }
   nodes.padFilter.frequency.rampTo(mode === "hunt" ? 500 + intensity * 2200 : 1400, 1);
   nodes.droneGain.gain.rampTo(mode === "tension" ? 0.08 : mode === "hunt" ? 0.03 + intensity * 0.04 : 0, 1);
 }

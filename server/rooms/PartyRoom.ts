@@ -1,4 +1,4 @@
-import { Room, ServerError, type Client } from "@colyseus/core";
+import { CloseCode, Room, ServerError, type Client } from "@colyseus/core";
 import { PATCH_MS, RULES, TICK_RATE } from "@shared/config";
 import { JoinError, type ActionSlot, type FxEvent, type JoinOptions, type MoveMsg } from "@shared/protocol";
 import type { GameState } from "@shared/schema";
@@ -18,7 +18,11 @@ function newCode(): string {
   }
 }
 
-type Binding = { kind: "host" | "watch" } | { kind: "player"; playerId: string };
+type Binding =
+  | { kind: "host" | "watch" }
+  | { kind: "player"; playerId: string }
+  /** Lost its seat/TV to another device; told so if it ever reconnects. */
+  | { kind: "evicted"; reason: string };
 
 const SLOTS = new Set<ActionSlot>(["a", "b", "item", "act"]);
 
@@ -37,7 +41,10 @@ export class PartyRoom extends Room<{ state: GameState }> {
   /** playerId -> sessionId currently driving that seat. */
   private seatHolder = new Map<string, string>();
   private hostHolder: string | null = null;
+  /** Pending automatic reconnections, so an evicted session can't come back. */
+  private pending = new Map<string, { reject: Function }>();
   private idleMs = 0;
+  private pruneMs = 0;
 
   maxClients = 24;
   autoDispose = false;
@@ -118,7 +125,7 @@ export class PartyRoom extends Room<{ state: GameState }> {
       .trim()
       .slice(0, 12);
     if (!name) throw new ServerError(JoinError.BAD_NAME, "Enter a name");
-    if (this.game.reclaimable(name)) return true;
+    if (this.game.reclaimable(name, this.reconnecting)) return true;
     const err = this.game.joinError(name);
     if (err === "in_progress") throw new ServerError(JoinError.IN_PROGRESS, "A round is in progress. You can join when it ends.");
     if (err === "full") throw new ServerError(JoinError.FULL, "This room is full");
@@ -143,7 +150,7 @@ export class PartyRoom extends Room<{ state: GameState }> {
 
     const name = String(options.name ?? "").replace(/\s+/g, " ").trim().slice(0, 12);
     let seat = options.seatToken ? this.game.seatByToken(options.seatToken) : undefined;
-    seat ??= name ? this.game.reclaimable(name) : undefined;
+    seat ??= name ? this.game.reclaimable(name, this.reconnecting) : undefined;
     if (!seat) {
       seat = this.game.addPlayer(name, typeof options.face === "number" ? options.face : -1);
       log(`${name} joined ${this.roomId}`, "game");
@@ -157,23 +164,49 @@ export class PartyRoom extends Room<{ state: GameState }> {
   /** Connection lost without saying goodbye: keep the seat, allow a quick reconnect. */
   async onDrop(client: Client) {
     this.markOffline(client);
+    const wait = this.allowReconnection(client, RULES.reconnectWindowSec);
+    this.pending.set(client.sessionId, wait);
     try {
-      await this.allowReconnection(client, RULES.reconnectWindowSec);
+      await wait;
     } catch {
       // Window passed: the seat stays (offline) and can be reclaimed with its token.
+    } finally {
+      this.pending.delete(client.sessionId);
     }
   }
 
   onReconnect(client: Client) {
     const b = this.bindings.get(client.sessionId);
-    if (b?.kind === "player" && this.seatHolder.get(b.playerId) === client.sessionId) this.game.setConnected(b.playerId, true);
-    if (b?.kind === "host" && this.hostHolder === client.sessionId) this.state.hostConnected = true;
+    if (b?.kind === "evicted") return this.dismiss(client, b.reason);
+    if (b?.kind === "player") {
+      if (this.seatHolder.get(b.playerId) === client.sessionId && this.game.player(b.playerId)) {
+        this.game.setConnected(b.playerId, true);
+      } else {
+        // The seat moved to another device, or was dropped while we were away.
+        this.dismiss(client, this.game.player(b.playerId) ? "You opened this seat in another tab or device" : "seat_expired");
+      }
+    }
+    if (b?.kind === "host") {
+      if (this.hostHolder === client.sessionId) this.state.hostConnected = true;
+      else this.dismiss(client, "This room was opened as TV on another screen");
+    }
   }
 
   /** Left on purpose (navigated away) or the reconnect window expired. */
   onLeave(client: Client) {
     this.markOffline(client);
     this.bindings.delete(client.sessionId);
+  }
+
+  /** Is this seat's phone in its automatic reconnect window right now? */
+  private reconnecting = (playerId: string) => {
+    const sid = this.seatHolder.get(playerId);
+    return !!sid && this.pending.has(sid);
+  };
+
+  /** One bad tick or message must not take the whole server (every room) down. */
+  onUncaughtException(error: Error, methodName: string) {
+    log(`room ${this.roomId}: ${methodName} threw: ${error?.stack ?? error}`, "game");
   }
 
   onDispose() {
@@ -191,11 +224,28 @@ export class PartyRoom extends Room<{ state: GameState }> {
 
   private evict(sessionId: string | null, by: Client, reason: string) {
     if (!sessionId || sessionId === by.sessionId) return;
+    this.bindings.set(sessionId, { kind: "evicted", reason });
+    // A dropped session waiting to reconnect: cancel that, it has nothing to come back to.
+    this.pending.get(sessionId)?.reject(new Error("evicted"));
     const old = this.clients.find((c) => c.sessionId === sessionId);
-    this.bindings.set(sessionId, { kind: "watch" });
-    if (old) {
-      old.send("kicked", reason);
-      old.leave();
+    if (old) this.dismiss(old, reason);
+  }
+
+  /** Tell a session why it's done here and close it for good (no automatic reconnect). */
+  private dismiss(client: Client, reason: string) {
+    client.send("kicked", reason);
+    this.bindings.delete(client.sessionId);
+    client.leave(CloseCode.CONSENTED);
+  }
+
+  /** Seats removed by the game (lobby timeout, leaving) must not keep sessions bound to them. */
+  private pruneSeats() {
+    for (const [playerId, sid] of this.seatHolder) {
+      if (this.game.player(playerId)) continue;
+      this.seatHolder.delete(playerId);
+      const c = this.clients.find((x) => x.sessionId === sid);
+      if (c && this.bindings.get(sid)?.kind === "player") this.dismiss(c, "seat_expired");
+      else this.bindings.delete(sid);
     }
   }
 
@@ -212,6 +262,11 @@ export class PartyRoom extends Room<{ state: GameState }> {
 
   private tick(dtMs: number) {
     this.game.tick(Math.min(100, dtMs));
+    this.pruneMs += dtMs;
+    if (this.pruneMs > 1000) {
+      this.pruneMs = 0;
+      this.pruneSeats();
+    }
     // Close rooms nobody has touched in a while.
     const humansOnline = this.clients.length > 0;
     this.idleMs = humansOnline ? 0 : this.idleMs + dtMs;

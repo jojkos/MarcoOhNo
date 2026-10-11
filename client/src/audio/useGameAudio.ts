@@ -91,7 +91,8 @@ function onEvents(view: View, events: FxEvent[]) {
         }
         break;
       case "help":
-        if (view === "tv" || (myRole() === "runner" && e.id !== me)) {
+        // Only free runners can answer a call for help.
+        if (view === "tv" || (myRole() === "runner" && e.id !== me && getRoom()?.state.players.get(me ?? "")?.status === "free")) {
           play("help", e.x);
           if (view === "mobile") haptic.alert();
         }
@@ -117,7 +118,8 @@ export function useGameAudio(view: View) {
     window.addEventListener("keydown", gesture);
     const unFx = onFx((events) => onEvents(view, events));
 
-    let lastPhase = "";
+    // Seeded on the first sample: (re)opening mid-hunt or on the results must not replay stingers.
+    let lastPhase: string | null = null;
     let lastSecond = -1;
     let lastBeat = 0;
     let lastCharge = 0;
@@ -128,6 +130,7 @@ export function useGameAudio(view: View) {
       const me = meId() ? s.players.get(meId()!) : undefined;
 
       // Phase stingers.
+      if (lastPhase === null) lastPhase = phase;
       if (phase !== lastPhase) {
         if (phase === "hunt") {
           playSfx("go");
@@ -136,7 +139,8 @@ export function useGameAudio(view: View) {
         if (phase === "round_over" && s.result) {
           try {
             const r = JSON.parse(s.result);
-            if (r.winner !== "aborted") {
+            // Players who sat the round out get no win/lose sting (their role is from an old round).
+            if (r.winner !== "aborted" && (view === "tv" || me?.inRound)) {
               const won = me ? (me.role === "seeker") === (r.winner === "seeker") : true;
               playSfx(won ? "win" : "lose");
             }

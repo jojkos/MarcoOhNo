@@ -101,7 +101,8 @@ export interface ServerMessages {
 
 /** GET /api/rooms/:code */
 export interface RoomStatus {
-  exists: boolean;
+  /** undefined = couldn't tell (offline, server waking up); only false means gone. */
+  exists?: boolean;
   phase?: Phase;
   players?: number;
   joinable?: boolean;

@@ -1,6 +1,6 @@
 # Marco Oh No!
 
-A neon hide-and-seek party game for 3–8 people in one room. The TV shows the seeker's flashlight,
+A neon hide-and-seek party game for 2–8 people in one room (3+ is best). The TV shows the seeker's flashlight,
 and everyone's phone is their controller.
 
 - **Runners** scatter while the lights are on. When it goes dark, they charge glowing orbs as a team

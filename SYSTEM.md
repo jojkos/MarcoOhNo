@@ -28,8 +28,9 @@ exposure meter: 1.5 s with 4+ runners, a bit longer for small groups. It drains 
   Alone you pick the lock in 30 s. Caged players have a **HELP** button that pings teammates.
 - 2nd catch: **ghost**. Ghosts float through walls, can't be caught or charge orbs, and can **BOO**.
 
-**Abilities** (`ABILITIES`): seeker **POLO** (rings near every free runner) and **SPRINT**;
-runner **DASH**; ghost **BOO** (a fake noise, indistinguishable from a real POLO ring).
+**Abilities** (`ABILITIES`): seeker **POLO** (rings near every free runner not hiding in a locker)
+and **SPRINT**; runner **DASH**; ghost **BOO** (a fake noise: during a POLO it looks exactly like a
+POLO ring, otherwise like any other noise).
 
 **Lockers.** Runners can hide in a locker for up to 12 s (then it creaks open). They're invisible
 inside. The seeker can search a locker (0.9 s); finding someone catches them on the spot.
@@ -38,7 +39,8 @@ inside. The seeker can search a locker (0.9 s); finding someone catches them on 
 blocks light), **decoy** (a fake runner that pops when lit) or **flash** (blinds a nearby seeker for
 2.5 s). Seekers get **flare** (lights an area for 6 s) or **trap** (roots a runner for 2.5 s, with a noise).
 
-**Noise.** Banking an orb, BOO, traps, and standing still for 10 s ("sneeze") make a ring on the seeker's view.
+**Noise.** Banking an orb, BOO, traps, leaving a locker, and standing still for 10 s ("sneeze") make a
+ring on the seeker's view.
 
 **Scoring** (`SCORING`): seeker +1 per catch, +3 for a win; runners +1 per orb, +2 per rescue, +3
 each for a team win. The results screen hands out awards (closest call, orb hoarder, hero, daredevil,
@@ -102,13 +104,18 @@ tests/     shared.test.ts  maze, physics, geometry
 | `/tv/CODE` | The shared screen. With the host token it controls the room, otherwise it watches |
 
 - The URL decides which room a tab is attached to. Colyseus reconnection (40 s window) handles
-  network drops; after that the client re-joins with its seat token.
+  network drops; after that the client re-joins with its seat token (with backoff). The server
+  allows ~20 s without a pong before dropping a socket; the phone shows "Reconnecting" only if a
+  drop lasts over 1.5 s, and a watchdog forces a reconnect if nothing arrives for 8 s while visible
+  (half-open sockets after the phone was locked).
 - Seats are saved per tab (sessionStorage) with a per-browser copy (localStorage). Host tokens are
-  per browser. A player who lost their token can reclaim a disconnected seat by joining with the same name.
+  per browser. A player who lost their token can reclaim a disconnected seat by joining with the same
+  name (not while that phone is still auto-reconnecting, so a blip can't be hijacked).
 - Opening the same seat or TV somewhere else moves it there; the old tab says so and can take it back.
 - Leaving a page only detaches (the seat shows as reconnecting). "Leave room" gives the seat up.
 - Rooms are never created implicitly. A room idle for 10 minutes is disposed and screens say it ended.
-- Grace periods: a player disconnected in the lobby is dropped after 20 s; a seeker gone for 30 s
+- Grace periods: a player disconnected in the lobby is dropped after 45 s (longer than the reconnect
+  window, so a reconnecting phone always finds its seat; if it doesn't, the phone says so); a seeker gone for 30 s
   cancels the round.
 
 ### Rendering

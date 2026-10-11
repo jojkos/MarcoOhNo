@@ -38,7 +38,9 @@ export function createApp(opts: AppOptions = {}) {
 
   const httpServer = createServer(app);
   // Colyseus shares the HTTP server; Vite's hot-reload socket keeps its own path.
-  const transport = new WebSocketTransport({ noServer: true });
+  // Phones on mobile data or Wi-Fi power-save miss pongs for a few seconds; the defaults
+  // (3 s x 2) dropped them for nothing. Allow ~20 s before treating a socket as dead.
+  const transport = new WebSocketTransport({ noServer: true, pingInterval: 5000, pingMaxRetries: 4 });
   transport.attachToServer(httpServer, { filter: (req) => !req.url?.startsWith(HMR_PATH) });
   const gameServer = new Server({ transport, greet: false, gracefullyShutdown: opts.gracefulShutdown ?? true });
   gameServer.define(ROOM_NAME, PartyRoom);

@@ -8,7 +8,18 @@ export const input = {
   joyY: 0,
   /** One-shot button presses, consumed by the next frame. */
   presses: new Set<ActionSlot>(),
+  /** Where this phone's own character is right now (predicted), for context buttons. */
+  selfX: NaN,
+  selfY: NaN,
 };
+
+/** Let go of all movement (joystick unmounted, app backgrounded, round over…). */
+export function releaseMove() {
+  input.joyX = 0;
+  input.joyY = 0;
+  keys.clear();
+  window.dispatchEvent(new Event("mo:release"));
+}
 
 const keys = new Set<string>();
 const KEY_ACTIONS: Record<string, ActionSlot> = {
@@ -30,7 +41,8 @@ if (typeof window !== "undefined") {
     }
   });
   window.addEventListener("keyup", (e) => keys.delete(e.code));
-  window.addEventListener("blur", () => keys.clear());
+  window.addEventListener("blur", () => releaseMove());
+  document.addEventListener("visibilitychange", () => document.visibilityState !== "visible" && releaseMove());
 }
 
 export function press(slot: ActionSlot) {

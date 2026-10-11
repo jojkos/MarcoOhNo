@@ -44,19 +44,48 @@ let offsets: number[] = [];
 let clockOffset = 0;
 export const serverNow = () => performance.now() + clockOffset;
 
+/** Last time anything arrived from the server (pong or state patch). */
+let lastHeard = 0;
+
+/**
+ * Clock sync + connection watchdog. Browsers can't see WebSocket pings, so a socket that
+ * went half-open while the phone was locked would look "connected" and frozen forever.
+ * If nothing arrives for a while (and the page is visible), force the SDK to reconnect.
+ */
 function startClockSync(r: Room<GameState>) {
   offsets = [];
+  lastHeard = performance.now();
   r.onMessage("pong", ({ t, server }: { t: number; server: number }) => {
     const now = performance.now();
+    lastHeard = now;
     const rtt = now - t;
     offsets.push(server + rtt / 2 - now);
     if (offsets.length > 15) offsets.shift();
     clockOffset = [...offsets].sort((a, b) => a - b)[Math.floor(offsets.length / 2)];
   });
-  const ping = () => r.connection?.isOpen && r.send("ping", { t: performance.now() });
+  const ping = () => room === r && r.connection?.isOpen && r.send("ping", { t: performance.now() });
   for (let i = 0; i < 5; i++) setTimeout(ping, i * 150);
-  const id = setInterval(ping, 2000);
-  r.onLeave(() => clearInterval(id));
+  const id = setInterval(() => {
+    if (room !== r) return clearInterval(id);
+    ping();
+    const quiet = performance.now() - lastHeard;
+    if (document.visibilityState === "visible" && r.connection?.isOpen && quiet > 8000) {
+      lastHeard = performance.now();
+      r.connection.close(4010, "stalled"); // 4010 = "may try reconnect": the SDK reconnects
+    }
+  }, 2000);
+  const wake = () => {
+    if (document.visibilityState !== "visible") return;
+    lastHeard = Math.max(lastHeard, performance.now() - 6000); // give it ~2 s to answer
+    ping();
+  };
+  document.addEventListener("visibilitychange", wake);
+  window.addEventListener("online", wake);
+  r.onLeave(() => {
+    clearInterval(id);
+    document.removeEventListener("visibilitychange", wake);
+    window.removeEventListener("online", wake);
+  });
 }
 
 // ------------------------------------------------------------------ view (React)
@@ -136,16 +165,24 @@ function scheduleView(s: GameState) {
 
 // ------------------------------------------------------------------ attach
 
-function setAttachment(patch: Partial<NonNullable<ReturnType<typeof useGameStore.getState>["attachment"]>>) {
+type Attachment = NonNullable<ReturnType<typeof useGameStore.getState>["attachment"]>;
+
+/** An error screen stays until the user acts (retry / navigate); late events can't undo it. */
+function setAttachment(patch: Partial<Attachment>, force = false) {
   const cur = useGameStore.getState().attachment;
-  if (cur) useGameStore.setState({ attachment: { ...cur, ...patch } });
+  if (!cur) return;
+  if (cur.status === "error" && patch.status !== "error" && !force) return;
+  useGameStore.setState({ attachment: { ...cur, ...patch } });
 }
 
 function fail(reason: string, message: string) {
   setAttachment({ status: "error", error: { reason, message } });
 }
 
+const FATAL_CODES = new Set([523, 525, 526, JoinError.BAD_NAME]);
+
 function codeReason(code: number | undefined): string {
+  if (code !== undefined && FATAL_CODES.has(code)) return "error";
   switch (code) {
     case 522:
       return "not_found";
@@ -164,38 +201,92 @@ function codeReason(code: number | undefined): string {
   }
 }
 
+/** Ask the server who we are in this room. Fails if the room closes or nobody answers. */
 function whoami<T>(r: Room<GameState>, type: string): Promise<T> {
-  return new Promise((resolve) => {
-    const off = r.onMessage(type, (msg: T) => {
+  return new Promise((resolve, reject) => {
+    const done = () => {
       off();
+      clearTimeout(timer);
+      r.onLeave.remove(onLeave);
+    };
+    const off = r.onMessage(type, (msg: T) => {
+      done();
       resolve(msg);
     });
+    const onLeave = () => {
+      done();
+      reject(Object.assign(new Error("Lost the connection"), { code: 0 }));
+    };
+    r.onLeave(onLeave);
+    const timer = setTimeout(() => {
+      done();
+      reject(Object.assign(new Error("The server didn't answer"), { code: 0 }));
+    }, 8000);
     r.send("whoami");
   });
+}
+
+/** Colyseus says "room not found" (522) for a missing room, but a proxy can return 522 too. */
+async function confirmGone(code: string): Promise<boolean> {
+  const st = await roomStatus(code);
+  return st.exists === false;
+}
+
+let dropTimer: ReturnType<typeof setTimeout> | null = null;
+function clearDropTimer() {
+  if (dropTimer) clearTimeout(dropTimer);
+  dropTimer = null;
 }
 
 /** Wire a freshly joined room into the app. */
 function bind(r: Room<GameState>, mode: AttachMode, isHost: boolean) {
   room = r;
+  let kicked = false;
   r.reconnection.maxRetries = 12;
   r.reconnection.minUptime = 1000;
-  r.onStateChange((s) => scheduleView(s));
-  r.onMessage("fx", (events: FxEvent[]) => fxListeners.forEach((fn) => fn(events)));
-  r.onMessage("correct", (c: { x: number; y: number }) => correctListeners.forEach((fn) => fn(c)));
-  r.onMessage("notice", (m: string) => toast({ title: m, duration: 3000 }));
+  // Don't replay a pile of stale moves after a reconnect.
+  r.reconnection.maxEnqueuedMessages = 4;
+  // Every handler ignores events from a room we've already moved on from.
+  r.onStateChange((s) => {
+    if (room !== r) return;
+    lastHeard = performance.now();
+    scheduleView(s);
+  });
+  r.onMessage("fx", (events: FxEvent[]) => room === r && fxListeners.forEach((fn) => fn(events)));
+  r.onMessage("correct", (c: { x: number; y: number }) => room === r && correctListeners.forEach((fn) => fn(c)));
+  r.onMessage("notice", (m: string) => room === r && toast({ title: m, duration: 3000 }));
   r.onMessage("kicked", (reason: string) => {
+    if (room !== r) return;
+    kicked = true;
     r.reconnection.enabled = false;
     attempt++;
-    fail("kicked", reason);
+    clearDropTimer();
+    if (reason === "seat_expired") {
+      if (target) dropSeat(target.code);
+      fail("seat_expired", "Your seat in this room expired. Join again.");
+    } else fail("kicked", reason);
   });
-  r.onDrop(() => setAttachment({ status: "reconnecting" }));
-  r.onReconnect(() => setAttachment({ status: "attached" }));
+  // Brief drops are normal on phones: only say "Reconnecting" if it takes a moment.
+  r.onDrop(() => {
+    if (room !== r || kicked) return;
+    if (!dropTimer) dropTimer = setTimeout(() => {
+      dropTimer = null;
+      if (room === r && !kicked) setAttachment({ status: "reconnecting" });
+    }, 1500);
+  });
+  r.onReconnect(() => {
+    if (room !== r || kicked) return;
+    clearDropTimer();
+    lastHeard = performance.now();
+    setAttachment({ status: "attached" });
+  });
   r.onLeave((code) => {
     if (room !== r) return;
     room = null;
+    clearDropTimer();
     roomListeners.forEach((fn) => fn(null));
-    // Consented leaves are ours (navigating away). Anything else: try to get back in.
-    if (code !== 4000 && target && useGameStore.getState().attachment?.status !== "error") {
+    // Consented leaves are ours (navigating away) or the server dismissing us. Anything else: get back in.
+    if (!kicked && code !== 4000 && target && useGameStore.getState().attachment?.status !== "error") {
       setAttachment({ status: "reconnecting" });
       scheduleRetry(1500);
     }
@@ -206,7 +297,10 @@ function bind(r: Room<GameState>, mode: AttachMode, isHost: boolean) {
   roomListeners.forEach((fn) => fn(r));
 }
 
+let retries = 0;
 function scheduleRetry(ms: number) {
+  // Back off: 1.5 s, 2.5 s, … up to 15 s between tries.
+  ms = Math.min(15000, ms * Math.pow(1.4, retries++));
   if (retryTimer) clearTimeout(retryTimer);
   retryTimer = setTimeout(() => {
     retryTimer = null;
@@ -231,6 +325,7 @@ async function join(mode: AttachMode, code: string) {
         r = await client.joinById<GameState>(code, { role: "watch" } satisfies JoinOptions);
       }
       if (stale()) return void r.leave();
+      retries = 0;
       bind(r, mode, isHost);
       return;
     }
@@ -239,6 +334,7 @@ async function join(mode: AttachMode, code: string) {
     if (!seat) return fail("no_seat", "You haven't joined this room yet.");
     const r = await client.joinById<GameState>(code, { role: "player", seatToken: seat.token } satisfies JoinOptions);
     if (stale()) return void r.leave();
+    retries = 0;
     useGameStore.setState({ playerId: seat.playerId });
     bind(r, mode, false);
     const me = await whoami<{ seatToken: string; playerId: string; name: string }>(r, "seat");
@@ -246,7 +342,9 @@ async function join(mode: AttachMode, code: string) {
     useGameStore.setState({ playerId: me.playerId });
   } catch (e: any) {
     if (stale()) return;
-    const reason = codeReason(e?.code);
+    let reason = codeReason(e?.code);
+    if (reason === "not_found" && !(await confirmGone(code))) reason = "network";
+    if (stale()) return;
     if (reason === "seat_expired") dropSeat(code);
     if (reason === "network") {
       setAttachment({ status: "reconnecting" });
@@ -260,17 +358,21 @@ function resetRoomState() {
   useGameStore.setState({ view: null, playerId: null });
 }
 
+/** Really let go of the current room, even mid-reconnect (otherwise it lingers and interferes). */
 async function leaveCurrent() {
   const r = room;
   room = null;
-  if (r) {
-    roomListeners.forEach((fn) => fn(null));
-    try {
-      await r.leave(true);
-    } catch {
-      /* already gone */
-    }
+  clearDropTimer();
+  if (!r) return;
+  roomListeners.forEach((fn) => fn(null));
+  r.reconnection.enabled = false;
+  try {
+    if (r.connection?.isOpen) await r.leave(true);
+    else r.connection?.close(4000);
+  } catch {
+    /* already gone */
   }
+  r.removeAllListeners();
 }
 
 // Hosts like Render's free tier sleep after ~15 min without HTTP requests, and WebSocket
@@ -297,6 +399,7 @@ function attachTo(mode: AttachMode, code: string) {
   void leaveCurrent();
   target = { mode, code };
   resetRoomState();
+  retries = 0;
   useGameStore.setState({ attachment: { mode, code, status: "connecting", isHost: false } });
   void join(mode, code);
 }
@@ -313,7 +416,8 @@ export function detach() {
 
 export function retryAttach() {
   if (!target) return;
-  setAttachment({ status: "connecting", error: undefined });
+  retries = 0;
+  setAttachment({ status: "connecting", error: undefined }, true);
   void join(target.mode, target.code);
 }
 
@@ -323,7 +427,14 @@ export async function createRoom(): Promise<{ code: string } | { error: string }
   try {
     await leaveCurrent();
     const r = await client.create<GameState>(ROOM_NAME, { role: "tv" } satisfies JoinOptions);
-    const { hostToken: token } = await whoami<{ hostToken: string }>(r, "host");
+    let token: string;
+    try {
+      ({ hostToken: token } = await whoami<{ hostToken: string }>(r, "host"));
+    } catch (e) {
+      r.reconnection.enabled = false;
+      void r.leave(true).catch(() => {});
+      throw e;
+    }
     saveHost(r.roomId, token);
     target = { mode: "tv", code: r.roomId };
     attempt++;
@@ -339,10 +450,16 @@ export async function createRoom(): Promise<{ code: string } | { error: string }
 export type JoinOutcome = { ok: true; code: string } | { ok: false; reason: string; error: string };
 
 /** Join with a new (or reclaimed) seat and remember it for this tab. */
-export async function joinRoom(code: string, name: string, face: number): Promise<JoinOutcome> {
+export async function joinRoom(code: string, name: string, face: number, cancelled: () => boolean = () => false): Promise<JoinOutcome> {
   try {
     await leaveCurrent();
     const r = await client.joinById<GameState>(code, { role: "player", name, face } satisfies JoinOptions);
+    if (cancelled()) {
+      // Left the Join page meanwhile: give the brand-new seat back.
+      r.send("leaveSeat");
+      void r.leave(true).catch(() => {});
+      return { ok: false, reason: "cancelled", error: "" };
+    }
     target = { mode: "play", code };
     attempt++;
     resetRoomState();
@@ -358,6 +475,14 @@ export async function joinRoom(code: string, name: string, face: number): Promis
   }
 }
 
+/** The room no longer has our seat (dropped while we were away): say so instead of idling seatless. */
+export function seatGone() {
+  if (!target) return;
+  dropSeat(target.code);
+  attempt++;
+  fail("seat_expired", "Your seat in this room expired. Join again.");
+}
+
 /** Give up the seat for good. */
 export function leaveSeat() {
   const code = target?.code;
@@ -366,11 +491,14 @@ export function leaveSeat() {
   detach();
 }
 
+/** `exists: undefined` = couldn't tell (offline, server waking up). Only `false` means gone. */
 export async function roomStatus(code: string): Promise<RoomStatus> {
   try {
-    return (await (await fetch(`/api/rooms/${encodeURIComponent(code)}`)).json()) as RoomStatus;
+    const res = await fetch(`/api/rooms/${encodeURIComponent(code)}`, { cache: "no-store" });
+    if (!res.ok) return { exists: undefined };
+    return (await res.json()) as RoomStatus;
   } catch {
-    return { exists: false };
+    return { exists: undefined };
   }
 }
 
@@ -381,5 +509,6 @@ export const send = {
   removeBot: () => room?.send("removeBot"),
   setFace: (face: number) => room?.send("setFace", { face }),
   action: (slot: "a" | "b" | "item" | "act") => room?.send("action", { slot }),
-  move: (m: { x: number; y: number; vx: number; vy: number; a: number }) => room?.send("move", m),
+  // Moves only matter live; queued ones would just be replayed stale after a reconnect.
+  move: (m: { x: number; y: number; vx: number; vy: number; a: number }) => room?.connection?.isOpen && room.send("move", m),
 };

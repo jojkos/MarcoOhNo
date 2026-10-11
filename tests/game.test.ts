@@ -290,6 +290,45 @@ describe("seats", () => {
   });
 });
 
+describe("review fixes", () => {
+  it("bots can't be removed mid-round (the bot might be the seeker)", () => {
+    const { game } = setup(1);
+    game.addBot();
+    expect(game.start()).toBeNull();
+    expect(game.removeBot()).toBe(false);
+    expect(game.players.length).toBe(2);
+  });
+
+  it("everyone running away isn't a seeker win", () => {
+    const { game, seeker, runners, ticks } = hunt(3);
+    for (const r of runners) game.leave(r.id);
+    ticks(DT * 2);
+    expect(game.phase).toBe("round_over");
+    expect(result(game).winner).toBe("aborted");
+    expect(game.player(seeker.id)!.score).toBe(0);
+  });
+
+  it("DASH while trapped doesn't burn the cooldown", () => {
+    const { game, runners } = hunt(2);
+    const [r] = runners;
+    r.rooted = true;
+    game.action(r.id, "a");
+    expect(r.cdA).toBe(0);
+  });
+
+  it("never the same seeker twice in a row", () => {
+    const { game } = setup(3);
+    let last = "";
+    for (let i = 0; i < 9; i++) {
+      expect(game.start()).toBeNull();
+      const s = game.state.round!.seekerId;
+      expect(s).not.toBe(last);
+      last = s;
+      game.toLobby();
+    }
+  });
+});
+
 describe("bots", () => {
   it("play full matches to a result without errors", () => {
     for (let seed = 1; seed <= 6; seed++) {

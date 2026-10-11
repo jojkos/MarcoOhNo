@@ -1,34 +1,15 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Lock, Ghost, ShieldCheck, WifiOff, EyeOff, DoorClosed, Siren, Target, Sun } from "lucide-react";
+import { Lock, Ghost, ShieldCheck, WifiOff, EyeOff, DoorClosed, Siren, Target, Sun, LogOut } from "lucide-react";
 import { RULES } from "@shared/config";
 import { useGameStore, useMe, type PlayerView } from "@/lib/gameStore";
-import { onFx } from "@/lib/session";
+import { leaveSeat, onFx } from "@/lib/session";
+import { navigate } from "wouter/use-browser-location";
 import { cn } from "@/lib/utils";
 import { GameCanvas } from "./GameCanvas";
 import { MobileControls } from "./MobileControls";
 import { RoleReveal } from "./RoleReveal";
 import { RoundOver } from "./RoundOver";
 import { OrbMeter, formatTime } from "./common";
-
-/** Keep the phone awake during a round; a sleeping phone drops its connection. */
-function useWakeLock() {
-  useEffect(() => {
-    let lock: { release(): Promise<void> } | null = null;
-    const request = () => {
-      (navigator as any).wakeLock
-        ?.request("screen")
-        .then((l: typeof lock) => (lock = l))
-        .catch(() => {});
-    };
-    request();
-    const onVisible = () => document.visibilityState === "visible" && request();
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      document.removeEventListener("visibilitychange", onVisible);
-      lock?.release().catch(() => {});
-    };
-  }, []);
-}
 
 const BANNER_TONES = {
   info: "border-neon-cyan/40 shadow-[0_0_40px_-12px_hsl(var(--primary)/0.6)]",
@@ -37,11 +18,27 @@ const BANNER_TONES = {
   ghost: "border-white/20",
 };
 
+/** Banners stack in a column under the top bar (several can be up at once). Solid, no backdrop
+ * blur: blurring a live WebGL canvas is expensive on phones. */
 function Banner({ children, tone }: { children: ReactNode; tone: keyof typeof BANNER_TONES }) {
+  return <div className={cn("rounded-2xl border bg-[hsl(230_35%_7%/0.94)] px-4 py-3 text-center animate-rise-in", BANNER_TONES[tone])}>{children}</div>;
+}
+
+function LeaveButton() {
   return (
-    <div className={cn("glass-strong pointer-events-none absolute left-3 right-3 top-[60px] z-30 rounded-2xl border px-4 py-3 text-center animate-rise-in", BANNER_TONES[tone])}>
-      {children}
-    </div>
+    <button
+      className="pointer-events-auto rounded-full p-1.5 text-white/40 transition hover:text-neon-red"
+      onClick={() => {
+        if (window.confirm("Leave this room? Your seat will be given up.")) {
+          leaveSeat();
+          navigate("/", { replace: true });
+        }
+      }}
+      aria-label="Leave room"
+      data-testid="button-leave-ingame"
+    >
+      <LogOut className="h-4 w-4" />
+    </button>
   );
 }
 
@@ -93,7 +90,6 @@ function useHideTimer(locker: number | undefined) {
 }
 
 export function MobileGameView() {
-  useWakeLock();
   const view = useGameStore((s) => s.view)!;
   const status = useGameStore((s) => s.attachment?.status);
   const me = useMe();
@@ -109,6 +105,16 @@ export function MobileGameView() {
         <EyeOff className="h-10 w-10 text-muted-foreground" />
         <p className="font-display text-xl font-bold">Sitting this round out</p>
         <p className="text-muted-foreground">Watch the TV. You'll be in the next round.</p>
+        <button
+          className="mt-4 inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-neon-red"
+          onClick={() => {
+            leaveSeat();
+            navigate("/", { replace: true });
+          }}
+          data-testid="button-leave"
+        >
+          <LogOut className="h-4 w-4" /> Leave room
+        </button>
       </div>
     );
   }
@@ -126,17 +132,21 @@ export function MobileGameView() {
   const online = status !== "reconnecting";
 
   return (
-    <div className="relative h-full w-full select-none overflow-hidden bg-black">
+    <div className="relative h-full w-full touch-none select-none overflow-hidden bg-black">
       <GameCanvas view="mobile" />
 
+      {/* Danger vignette: a fixed gradient whose opacity changes (cheap to composite). */}
       <div
-        className="pointer-events-none absolute inset-0 z-10 transition-[box-shadow] duration-100"
-        style={{ boxShadow: `inset 0 0 ${60 + exposure * 120}px ${exposure * 40}px rgba(255,40,70,${exposure * 0.9})` }}
+        className="pointer-events-none absolute inset-0 z-10"
+        style={{ opacity: Math.min(1, exposure * 1.2), background: "radial-gradient(ellipse at center, transparent 45%, rgba(255,40,70,0.85) 100%)" }}
       />
 
       {phase !== "round_over" && (
-        <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-between gap-2 bg-gradient-to-b from-black/90 to-transparent px-3 pb-6 pt-[max(0.6rem,env(safe-area-inset-top))]">
-          <span className={cn("rounded-lg px-2.5 py-1 font-display text-xs font-bold uppercase tracking-wider", roleTag.cls)}>{roleTag.label}</span>
+        <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-between gap-2 bg-gradient-to-b from-black/90 to-transparent px-3 pb-6 pt-[max(0.6rem,env(safe-area-inset-top))]">
+          <span className="flex items-center gap-1">
+            <LeaveButton />
+            <span className={cn("rounded-lg px-2.5 py-1 font-display text-xs font-bold uppercase tracking-wider", roleTag.cls)}>{roleTag.label}</span>
+          </span>
           <span className={cn("font-display text-3xl font-bold tabular-nums", hunt && view.phaseLeft < 20000 && "animate-pulse-fast text-neon-red glow-text-red")}>
             {hunt ? formatTime(view.phaseLeft) : phase === "scatter" ? Math.ceil(view.phaseLeft / 1000) : ""}
           </span>
@@ -144,6 +154,7 @@ export function MobileGameView() {
         </div>
       )}
 
+      <div className="pointer-events-none absolute left-3 right-3 top-[60px] z-30 flex flex-col gap-2">
       {!online && (
         <Banner tone="danger">
           <span className="flex items-center justify-center gap-2 font-display font-bold">
@@ -157,7 +168,7 @@ export function MobileGameView() {
           {phase === "scatter" && !isSeeker && (
             <Banner tone="info">
               <p className="font-display text-lg font-bold uppercase">Hide! Lights out in {Math.ceil(view.phaseLeft / 1000)}</p>
-              <p className="text-sm text-muted-foreground">Stand on a glowing orb to charge it. Blue cabinets are lockers you can hide in.</p>
+              <p className="text-sm text-muted-foreground">When the lights go out, stand on glowing orbs to charge them. Blue cabinets are lockers you can hide in.</p>
             </Banner>
           )}
           {hunt && me.status === "caged" && (
@@ -207,9 +218,10 @@ export function MobileGameView() {
               </span>
             </Banner>
           )}
-          {hunt && <HelpArrows me={me} />}
         </>
       )}
+      </div>
+      {online && me && hunt && <HelpArrows me={me} />}
 
       {phase === "scatter" && isSeeker && (
         <div className="pointer-events-none absolute inset-0 z-30 flex flex-col items-center justify-center bg-black/85 p-6 text-center">

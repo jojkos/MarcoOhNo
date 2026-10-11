@@ -143,6 +143,10 @@ npx tsx script/sim.ts    # bot balance simulation
 npm run build && npm start
 ```
 
-**Hosting.** Rooms live in the server's memory, so run exactly one always-on instance (Replit:
-Reserved VM, or Autoscale with max instances = 1; scale-to-zero ends rooms when idle).
-WebSockets and HTTP share one port. Requires Node 22+.
+**Hosting (Render).** Deployed as a Render web service that auto-deploys `main`:
+build `npm install && npm run build`, start `npm start`. Render sets `PORT`; WebSockets and HTTP
+share it. Node 22 (`engines`). Rooms live in the server's memory, so:
+- Run a single instance. A deploy or restart ends any open rooms (screens say "Room has ended").
+- The free tier sleeps after ~15 min without HTTP requests and takes ~1 min to wake. Open room
+  pages ping `/api/rooms/:code` every 4 min to keep it awake during a session.
+- The server needs very little CPU (~0.15 ms per 30 Hz tick with 8 players), so the free tier is enough.

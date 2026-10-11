@@ -273,6 +273,14 @@ async function leaveCurrent() {
   }
 }
 
+// Hosts like Render's free tier sleep after ~15 min without HTTP requests, and WebSocket
+// traffic may not count. While a room is open, touch the API now and then to stay awake.
+if (typeof window !== "undefined") {
+  setInterval(() => {
+    if (target) fetch(`/api/rooms/${target.code}`, { cache: "no-store" }).catch(() => {});
+  }, 4 * 60_000);
+}
+
 /** Follow a room as the TV (host if this browser owns it, otherwise watching). */
 export function attachTv(code: string) {
   attachTo("tv", code);

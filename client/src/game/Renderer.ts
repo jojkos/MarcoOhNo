@@ -87,7 +87,8 @@ export class GameRenderer {
       background: 0x020308,
       antialias: true,
       autoDensity: true,
-      resolution: Math.min(window.devicePixelRatio || 1, this.view === "tv" ? 2 : 2),
+      // Phones: 1.5x is visually close to native and much cheaper for the GPU.
+      resolution: Math.min(window.devicePixelRatio || 1, this.view === "tv" ? 2 : 1.5),
       preference: "webgl",
       powerPreference: "high-performance",
     });
@@ -400,13 +401,15 @@ export class GameRenderer {
         }
       }
     } else {
-      const span = me?.role === "seeker" ? 640 : me?.status === "ghost" ? 760 : 520;
+      // World px across the short side: tight enough that moving feels quick, wide enough for the cone.
+      const span = me?.role === "seeker" ? 560 : me?.status === "ghost" ? 680 : 480;
       tz = Math.min(W, H) / span;
       const mp = me ? pos.get(me.id) : undefined;
       if (mp) {
-        const look = 0.22;
-        const lx = Math.max(-70, Math.min(70, mp.vx * look));
-        const ly = Math.max(-70, Math.min(70, mp.vy * look));
+        // Small lead in the direction of travel; too much makes your character drift on screen.
+        const look = 0.12;
+        const lx = Math.max(-40, Math.min(40, mp.vx * look));
+        const ly = Math.max(-40, Math.min(40, mp.vy * look));
         tx = mp.x + lx;
         ty = mp.y + ly;
       } else {
@@ -417,7 +420,7 @@ export class GameRenderer {
     if (!this.cam.ready) {
       Object.assign(this.cam, { x: tx, y: ty, zoom: tz, ready: true });
     } else {
-      const k = 1 - Math.exp(-dt * (this.view === "tv" ? 4 : 7));
+      const k = 1 - Math.exp(-dt * (this.view === "tv" ? 4 : 10));
       this.cam.x += (tx - this.cam.x) * k;
       this.cam.y += (ty - this.cam.y) * k;
       this.cam.zoom += (tz - this.cam.zoom) * k;

@@ -118,7 +118,15 @@ export class Lighting {
   resize(w: number, h: number) {
     const rw = Math.max(16, Math.ceil(w * this.resolution));
     const rh = Math.max(16, Math.ceil(h * this.resolution));
-    this.rt.resize(rw, rh);
+    if (rw !== this.rt.width || rh !== this.rt.height) {
+      // Resizing a render texture in place leaves its GPU target at the old size,
+      // so the darkness stops covering the screen. Swap in a fresh one instead.
+      const old = this.rt;
+      this.rt = RenderTexture.create({ width: rw, height: rh });
+      this.sprite.texture = this.rt;
+      this.haze.texture = this.rt;
+      old.destroy(true);
+    }
     this.sprite.scale.set(1 / this.resolution);
     this.haze.scale.set(1 / this.resolution);
   }

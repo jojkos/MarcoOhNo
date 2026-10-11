@@ -9,8 +9,12 @@ import type { PlayerView } from "@/lib/gameStore";
 import { haptic } from "@/audio/haptics";
 import { cn } from "@/lib/utils";
 
-const JOY_RADIUS = 58;
-const DEADZONE = 0.1;
+const JOY_RADIUS = 56;
+const DEADZONE = 0.12;
+/** Deflection (0..1) that gives full speed. */
+const FULL_SPEED_AT = 0.5;
+/** Speed just outside the deadzone. */
+const MIN_SPEED = 0.35;
 
 type Look = { label: string; icon: LucideIcon; bg: string; glow: string };
 
@@ -36,42 +40,57 @@ const ACT_UI: Record<"hide" | "leave" | "search", Look> = {
   search: { label: "SEARCH", icon: Search, bg: "linear-gradient(135deg,#fda4af,#e11d48)", glow: "rgba(225,29,72,0.7)" },
 };
 
-/** Floating joystick: touch anywhere on the left part of the screen. */
+/**
+ * Floating joystick: touch anywhere on the left part of the screen.
+ * - The base trails your thumb when you drag past the rim, so reversing is instant.
+ * - Full speed at about half deflection; a light touch still moves at a decent pace.
+ * - Everything moves via style (no React re-render per touch move).
+ */
 function Joystick() {
-  const [base, setBase] = useState<{ x: number; y: number } | null>(null);
+  const [active, setActive] = useState(false);
   const origin = useRef<{ x: number; y: number } | null>(null);
-  // The knob moves via style, not React state: no re-render per touch move.
+  const ring = useRef<HTMLDivElement | null>(null);
   const knob = useRef<HTMLDivElement>(null);
-  const knobAt = useRef({ x: 0, y: 0 });
   const pointer = useRef<number | null>(null);
 
-  const update = (clientX: number, clientY: number, origin: { x: number; y: number }) => {
-    let dx = clientX - origin.x;
-    let dy = clientY - origin.y;
-    const len = Math.hypot(dx, dy);
+  const place = () => {
+    const o = origin.current;
+    if (o && ring.current) ring.current.style.transform = `translate(${o.x - JOY_RADIUS}px, ${o.y - JOY_RADIUS}px)`;
+  };
+
+  const update = (clientX: number, clientY: number) => {
+    const o = origin.current;
+    if (!o) return;
+    let dx = clientX - o.x;
+    let dy = clientY - o.y;
+    let len = Math.hypot(dx, dy);
     if (len > JOY_RADIUS) {
-      dx = (dx / len) * JOY_RADIUS;
-      dy = (dy / len) * JOY_RADIUS;
+      // Drag the base along so the knob stays on the rim under the thumb.
+      const over = len - JOY_RADIUS;
+      o.x += (dx / len) * over;
+      o.y += (dy / len) * over;
+      dx = clientX - o.x;
+      dy = clientY - o.y;
+      len = JOY_RADIUS;
+      place();
     }
-    knobAt.current = { x: dx, y: dy };
     if (knob.current) knob.current.style.transform = `translate(${dx}px, ${dy}px)`;
-    const mag = Math.min(1, len / JOY_RADIUS);
+    const mag = len / JOY_RADIUS;
     if (mag < DEADZONE) {
       input.joyX = 0;
       input.joyY = 0;
-    } else {
-      // Ease out of the deadzone; small pushes let you sneak slowly.
-      const scaled = Math.min(1, (mag - DEADZONE) / (0.75 - DEADZONE));
-      input.joyX = (dx / (len || 1)) * scaled;
-      input.joyY = (dy / (len || 1)) * scaled;
+      return;
     }
+    const k = Math.min(1, (mag - DEADZONE) / (FULL_SPEED_AT - DEADZONE));
+    const speed = MIN_SPEED + (1 - MIN_SPEED) * k;
+    input.joyX = (dx / len) * speed;
+    input.joyY = (dy / len) * speed;
   };
 
   const end = () => {
     pointer.current = null;
     origin.current = null;
-    setBase(null);
-    knobAt.current = { x: 0, y: 0 };
+    setActive(false);
     input.joyX = 0;
     input.joyY = 0;
   };
@@ -83,31 +102,36 @@ function Joystick() {
         if (pointer.current !== null) return;
         pointer.current = e.pointerId;
         e.currentTarget.setPointerCapture(e.pointerId);
-        const o = { x: e.clientX, y: e.clientY };
-        origin.current = o;
-        setBase(o);
-        update(e.clientX, e.clientY, o);
+        origin.current = { x: e.clientX, y: e.clientY };
+        setActive(true);
+        update(e.clientX, e.clientY);
       }}
       onPointerMove={(e) => {
-        if (e.pointerId !== pointer.current || !origin.current) return;
-        update(e.clientX, e.clientY, origin.current);
+        if (e.pointerId !== pointer.current) return;
+        update(e.clientX, e.clientY);
       }}
       onPointerUp={(e) => e.pointerId === pointer.current && end()}
       onPointerCancel={(e) => e.pointerId === pointer.current && end()}
       data-testid="control-joystick"
     >
-      {base ? (
+      <div
+        ref={(el) => {
+          ring.current = el;
+          place();
+        }}
+        className={cn(
+          "pointer-events-none fixed left-0 top-0 rounded-full border-2 border-neon-cyan/40 bg-neon-cyan/[0.06] shadow-[0_0_30px_-6px_hsl(var(--primary)/0.6)]",
+          !active && "hidden",
+        )}
+        style={{ width: JOY_RADIUS * 2, height: JOY_RADIUS * 2 }}
+      >
         <div
-          className="pointer-events-none fixed rounded-full border-2 border-neon-cyan/40 bg-neon-cyan/[0.06] shadow-[0_0_30px_-6px_hsl(var(--primary)/0.6)]"
-          style={{ left: base.x - JOY_RADIUS, top: base.y - JOY_RADIUS, width: JOY_RADIUS * 2, height: JOY_RADIUS * 2 }}
-        >
-          <div
-            className="absolute h-14 w-14 rounded-full bg-[radial-gradient(circle_at_35%_30%,#ffffff,#9fe9ff)] shadow-[0_0_24px_2px_hsl(var(--primary)/0.7)]"
-            ref={knob}
-            style={{ left: JOY_RADIUS - 28, top: JOY_RADIUS - 28, transform: `translate(${knobAt.current.x}px, ${knobAt.current.y}px)` }}
-          />
-        </div>
-      ) : (
+          ref={knob}
+          className="absolute h-14 w-14 rounded-full bg-[radial-gradient(circle_at_35%_30%,#ffffff,#9fe9ff)] shadow-[0_0_24px_2px_hsl(var(--primary)/0.7)]"
+          style={{ left: JOY_RADIUS - 28, top: JOY_RADIUS - 28 }}
+        />
+      </div>
+      {!active && (
         <div className="pointer-events-none absolute bottom-[max(2.5rem,env(safe-area-inset-bottom))] left-8 flex items-center gap-3 text-xs uppercase tracking-[0.25em] text-white/30">
           <span className="h-12 w-12 rounded-full border-2 border-dashed border-white/20" />
           Drag to move
